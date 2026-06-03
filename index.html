@@ -1,0 +1,1002 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PetLab — Controle de Estoque</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+/* ── RESET & VARS ─────────────────────────────────────────── */
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#F1F5F9;--sidebar:#0F172A;--sidebar-text:#94A3B8;--sidebar-hover:#1E293B;
+  --white:#FFF;--primary:#0D9488;--primary-d:#0F766E;--primary-l:#CCFBF1;
+  --warn:#F59E0B;--warn-l:#FEF3C7;--danger:#EF4444;--danger-l:#FEE2E2;
+  --ok:#10B981;--ok-l:#D1FAE5;--text:#0F172A;--muted:#64748B;
+  --border:#E2E8F0;--radius:10px;
+  --sh:0 1px 3px rgba(0,0,0,.1),0 1px 2px rgba(0,0,0,.06)
+}
+body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);display:flex;min-height:100vh;font-size:14px}
+
+/* LOADER */
+#loader{position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9999;display:none;align-items:center;justify-content:center;flex-direction:column;gap:12px}
+.spinner{width:40px;height:40px;border:3px solid rgba(255,255,255,.2);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+#loader p{color:#fff;font-size:14px;font-weight:500}
+
+/* TOAST */
+#toast{position:fixed;bottom:24px;right:24px;z-index:9998;display:flex;flex-direction:column;gap:8px}
+.toast-item{padding:12px 18px;border-radius:9px;font-size:13px;font-weight:500;box-shadow:0 4px 20px rgba(0,0,0,.15);animation:slideUp .25s ease;max-width:320px}
+.toast-ok{background:#0D9488;color:#fff}
+.toast-err{background:var(--danger);color:#fff}
+@keyframes slideUp{from{transform:translateY(12px);opacity:0}to{transform:translateY(0);opacity:1}}
+
+/* SIDEBAR */
+.sidebar{width:240px;min-height:100vh;background:var(--sidebar);position:fixed;left:0;top:0;display:flex;flex-direction:column;z-index:100}
+.sb-logo{padding:22px 20px 18px;border-bottom:1px solid #1E293B}
+.sb-brand{display:flex;align-items:center;gap:10px}
+.sb-icon{width:36px;height:36px;background:var(--primary);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}
+.sb-name{color:#F8FAFC;font-weight:700;font-size:15px;letter-spacing:-.3px}
+.sb-sub{color:var(--sidebar-text);font-size:11px;margin-top:1px}
+.sb-nav{padding:14px 10px;flex:1}
+.nav-lbl{color:#475569;font-size:10px;font-weight:600;letter-spacing:.8px;text-transform:uppercase;padding:8px 8px 4px;margin-top:8px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:7px;color:var(--sidebar-text);cursor:pointer;margin-bottom:2px;transition:all .15s;font-size:13px;font-weight:500;user-select:none}
+.nav-item:hover{background:var(--sidebar-hover);color:#E2E8F0}
+.nav-item.active{background:rgba(13,148,136,.18);color:#2DD4BF}
+.nav-item .ni{font-size:16px;width:20px;text-align:center;flex-shrink:0}
+.nav-item .nb{margin-left:auto;background:var(--danger);color:#fff;border-radius:100px;font-size:10px;font-weight:700;padding:1px 6px;min-width:18px;text-align:center;display:none}
+.nav-item .nb.show{display:inline}
+/* real-time indicator */
+.rt-dot{width:7px;height:7px;border-radius:50%;background:#10B981;margin-left:auto;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* MAIN */
+.main{margin-left:240px;flex:1;min-height:100vh;display:flex;flex-direction:column}
+.topbar{background:var(--white);border-bottom:1px solid var(--border);padding:0 28px;height:58px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50}
+.topbar-title{font-size:17px;font-weight:700;letter-spacing:-.3px}
+.topbar-actions{display:flex;gap:8px;align-items:center}
+.content{padding:26px;flex:1}
+
+/* SECTIONS */
+.section{display:none}.section.active{display:block}
+
+/* STATS */
+.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:22px}
+.stat-card{background:var(--white);border-radius:var(--radius);padding:18px 20px;box-shadow:var(--sh);border:1px solid var(--border)}
+.stat-card .lbl{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px}
+.stat-card .val{font-size:24px;font-weight:700;letter-spacing:-.5px;line-height:1;margin-bottom:5px}
+.stat-card .sub{font-size:11.5px;color:var(--muted)}
+.stat-card.c-primary .val{color:var(--primary)}.stat-card.c-danger .val{color:var(--danger)}
+.stat-card.c-ok .val{color:var(--ok)}.stat-card.c-warn .val{color:var(--warn)}
+
+/* PANEL */
+.panel{background:var(--white);border-radius:var(--radius);box-shadow:var(--sh);border:1px solid var(--border);overflow:hidden;margin-bottom:20px}
+.panel-hdr{padding:14px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.panel-ttl{font-size:14px;font-weight:600}
+.panel-body{padding:20px}
+
+/* TABLE */
+.tbl-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+thead th{text-align:left;padding:9px 14px;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;background:#F8FAFC;border-bottom:1px solid var(--border);white-space:nowrap}
+tbody td{padding:11px 14px;border-bottom:1px solid #F1F5F9;color:var(--text);font-size:13px;vertical-align:middle}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:#F8FAFC}
+
+/* BADGE */
+.badge{display:inline-flex;align-items:center;padding:3px 9px;border-radius:100px;font-size:11px;font-weight:600;white-space:nowrap}
+.b-primary{background:var(--primary-l);color:var(--primary-d)}.b-ok{background:var(--ok-l);color:#065F46}
+.b-warn{background:var(--warn-l);color:#92400E}.b-danger{background:var(--danger-l);color:#991B1B}
+.b-gray{background:#F1F5F9;color:var(--muted)}
+
+/* BUTTONS */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:7px 15px;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;border:none;transition:all .15s;font-family:'DM Sans',sans-serif;white-space:nowrap}
+.btn-primary{background:var(--primary);color:#fff}.btn-primary:hover{background:var(--primary-d)}
+.btn-outline{background:transparent;border:1.5px solid var(--border);color:var(--text)}.btn-outline:hover{background:#F8FAFC}
+.btn-sm{padding:5px 10px;font-size:12px}
+
+/* FORMS */
+.fg{margin-bottom:14px}
+label{display:block;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px}
+input,select,textarea{width:100%;padding:8px 11px;border:1.5px solid var(--border);border-radius:7px;font-size:13px;font-family:'DM Sans',sans-serif;color:var(--text);background:#fff;transition:border-color .15s}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px rgba(13,148,136,.1)}
+.fr{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.fr3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+select[multiple]{height:110px}
+input[readonly]{background:#F8FAFC;cursor:default}
+
+/* MODAL */
+.mo{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;display:none;align-items:center;justify-content:center;padding:16px}
+.mo.open{display:flex}
+.modal{background:#fff;border-radius:14px;width:100%;max-width:560px;max-height:92vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.18)}
+.modal-xl{max-width:1060px}
+.modal-hdr{padding:18px 22px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:#fff;z-index:1;border-radius:14px 14px 0 0}
+.modal-hdr h3{font-size:15px;font-weight:700}
+.modal-hdr .msub{font-size:11.5px;color:var(--muted);margin-top:1px}
+.modal-x{background:none;border:none;font-size:22px;cursor:pointer;color:var(--muted);padding:2px;line-height:1;font-family:sans-serif}
+.modal-body{padding:18px 22px}
+.modal-foot{padding:14px 22px 18px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end}
+
+/* ALERTS */
+.alert{display:flex;align-items:flex-start;gap:10px;padding:11px 14px;border-radius:8px;margin-bottom:14px;font-size:13px;line-height:1.4}
+.alert-warn{background:var(--warn-l);border-left:3px solid var(--warn)}
+.alert-ok{background:var(--ok-l);border-left:3px solid var(--ok)}
+
+/* EMPTY */
+.empty{text-align:center;padding:40px 20px;color:var(--muted)}
+.empty .ei{font-size:36px;margin-bottom:10px}
+.empty h3{font-size:14px;font-weight:600;margin-bottom:5px;color:var(--text)}
+.empty p{font-size:12.5px}
+
+/* CMV */
+.cmv-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px}
+.cmv-box{background:#F8FAFC;border:1px solid var(--border);border-radius:8px;padding:14px;text-align:center}
+.cmv-box .cl{font-size:10.5px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+.cmv-box .cv{font-size:19px;font-weight:700}
+.cmv-box.hl{background:var(--primary-l);border-color:var(--primary)}
+.cmv-box.hl .cv{color:var(--primary-d)}
+
+/* FILTER PILLS */
+.filter-bar{display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+.fpill{padding:4px 13px;border-radius:100px;font-size:12px;font-weight:600;cursor:pointer;border:1.5px solid var(--border);background:#fff;color:var(--muted);transition:all .15s}
+.fpill.active,.fpill:hover{background:var(--primary);border-color:var(--primary);color:#fff}
+
+/* SEARCH */
+.search-wrap{position:relative;margin-bottom:14px}
+.search-wrap input{padding-left:34px}
+.search-ico{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:14px;pointer-events:none}
+
+/* PERIOD ITEM */
+.pi{background:#fff;border:1px solid var(--border);border-radius:9px;padding:13px 16px;margin-bottom:10px;display:flex;align-items:center;gap:13px}
+.pi-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
+.pi-dot.aberto{background:var(--ok)}.pi-dot.fechado{background:var(--muted)}
+
+/* COUNT */
+.cnt-input{width:68px;text-align:center;padding:6px 8px;font-size:13px}
+.cnt-scroll{max-height:58vh;overflow-y:auto}
+
+/* MISC */
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.divider{height:1px;background:var(--border);margin:14px 0}
+.mono{font-family:'DM Mono',monospace}
+.fw6{font-weight:600}.fw7{font-weight:700}
+.text-ok{color:var(--ok)}.text-danger{color:var(--danger)}
+.text-primary{color:var(--primary)}.text-muted{color:var(--muted)}
+</style>
+</head>
+<body>
+
+<!-- ── LOADING OVERLAY ───────────────────────────────────── -->
+<div id="loader"><div class="spinner"></div><p>Sincronizando dados...</p></div>
+<div id="toast"></div>
+
+<!-- ══════════════════════════════════════════════════════════
+     CONFIGURAÇÃO — COLE SUAS CREDENCIAIS DO SUPABASE ABAIXO
+════════════════════════════════════════════════════════════ -->
+<script>
+const SUPABASE_URL = 'https://mxiqwmjrotjjumsxmprf.supabase.co';      // Ex: https://xyzxyz.supabase.co
+const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';    // Chave anon/public do projeto
+</script>
+<!-- ══════════════════════════════════════════════════════════ -->
+
+<!-- SIDEBAR -->
+<aside class="sidebar">
+  <div class="sb-logo">
+    <div class="sb-brand">
+      <div class="sb-icon">🔬</div>
+      <div><div class="sb-name">PetLab</div><div class="sb-sub">Controle de Estoque</div></div>
+    </div>
+  </div>
+  <nav class="sb-nav">
+    <div class="nav-lbl">Principal</div>
+    <div class="nav-item active" id="nav-dashboard" onclick="go('dashboard')"><span class="ni">📊</span>Dashboard<div class="rt-dot" id="rt-dot" title="Sincronização ativa" style="display:none"></div></div>
+    <div class="nav-item" id="nav-periodos" onclick="go('periodos')"><span class="ni">📅</span>Períodos</div>
+    <div class="nav-item" id="nav-contagem" onclick="go('contagem')"><span class="ni">📋</span>Contagem</div>
+    <div class="nav-item" id="nav-compras" onclick="go('compras')"><span class="ni">🛒</span>Compras</div>
+    <div class="nav-item" id="nav-cmv" onclick="go('cmv')"><span class="ni">📈</span>CMV</div>
+    <div class="nav-lbl">Cadastros</div>
+    <div class="nav-item" id="nav-produtos" onclick="go('produtos')"><span class="ni">📦</span>Produtos</div>
+    <div class="nav-item" id="nav-fornecedores" onclick="go('fornecedores')"><span class="ni">🏭</span>Fornecedores</div>
+    <div class="nav-item" id="nav-alertas" onclick="go('alertas')"><span class="ni">🔔</span>Alertas<span class="nb" id="alert-badge">0</span></div>
+  </nav>
+</aside>
+
+<!-- MAIN -->
+<main class="main">
+  <header class="topbar">
+    <span class="topbar-title" id="page-title">Dashboard</span>
+    <div class="topbar-actions" id="page-actions"></div>
+  </header>
+  <div class="content">
+
+    <!-- DASHBOARD -->
+    <section class="section active" id="section-dashboard">
+      <div class="stats-grid">
+        <div class="stat-card c-primary">
+          <div class="lbl">Valor Total em Estoque</div>
+          <div class="val" id="d-estoque">—</div>
+          <div class="sub" id="d-estoque-sub">Última contagem registrada</div>
+        </div>
+        <div class="stat-card">
+          <div class="lbl">CMV Último Período</div>
+          <div class="val" id="d-cmv">—</div>
+          <div class="sub" id="d-cmv-sub">Sem período fechado</div>
+        </div>
+        <div class="stat-card">
+          <div class="lbl">Período Ativo</div>
+          <div class="val" id="d-period" style="font-size:16px">Nenhum</div>
+          <div class="sub" id="d-period-sub">Crie um período para começar</div>
+        </div>
+        <div class="stat-card c-danger">
+          <div class="lbl">Alertas de Estoque</div>
+          <div class="val" id="d-alerts">0</div>
+          <div class="sub">Itens abaixo do mínimo</div>
+        </div>
+      </div>
+      <div class="g2">
+        <div class="panel">
+          <div class="panel-hdr"><span class="panel-ttl">🔔 Alertas de Estoque Mínimo</span><button class="btn btn-sm btn-outline" onclick="go('alertas')">Ver todos</button></div>
+          <div class="tbl-wrap">
+            <table><thead><tr><th>Produto</th><th>Atual</th><th>Mínimo</th><th>Fornecedor</th></tr></thead>
+            <tbody id="d-alerts-tbody"><tr><td colspan="4"><div class="empty" style="padding:16px"><div class="ei">✅</div><p>Nenhum alerta</p></div></td></tr></tbody></table>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-hdr"><span class="panel-ttl">📅 Períodos Recentes</span><button class="btn btn-sm btn-outline" onclick="go('periodos')">Ver todos</button></div>
+          <div id="d-periods" style="padding:12px 16px"><div class="empty" style="padding:16px"><div class="ei">📅</div><p>Nenhum período criado</p></div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PERÍODOS -->
+    <section class="section" id="section-periodos">
+      <div class="panel">
+        <div class="panel-hdr"><span class="panel-ttl">Gestão de Períodos</span><button class="btn btn-primary" onclick="openPeriodModal()">+ Novo Período</button></div>
+        <div class="tbl-wrap">
+          <table><thead><tr><th>Período</th><th>Tipo</th><th>Início</th><th>Fim</th><th>Status</th><th>Abertura</th><th>Fechamento</th><th>CMV</th><th>Ações</th></tr></thead>
+          <tbody id="periodos-tbody"><tr><td colspan="9"><div class="empty"><div class="ei">📅</div><h3>Nenhum período</h3><p>Crie um período para começar.</p></div></td></tr></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- CONTAGEM -->
+    <section class="section" id="section-contagem">
+      <div class="panel">
+        <div class="panel-hdr"><span class="panel-ttl">Contagens de Estoque</span><button class="btn btn-primary" onclick="openCountModal()">+ Nova Contagem</button></div>
+        <div class="tbl-wrap">
+          <table><thead><tr><th>Data</th><th>Período</th><th>Tipo</th><th>Itens &gt; 0</th><th>Valor Total</th><th>Ações</th></tr></thead>
+          <tbody id="contagem-tbody"><tr><td colspan="6"><div class="empty"><div class="ei">📋</div><h3>Nenhuma contagem</h3><p>Faça a primeira contagem.</p></div></td></tr></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- COMPRAS -->
+    <section class="section" id="section-compras">
+      <div class="panel">
+        <div class="panel-hdr"><span class="panel-ttl">Registro de Compras</span><button class="btn btn-primary" onclick="openPurchaseModal()">+ Registrar Compra</button></div>
+        <div class="tbl-wrap">
+          <table><thead><tr><th>Data</th><th>Produto</th><th>Fornecedor</th><th>Qtd</th><th>Custo Unit.</th><th>Total</th><th>Período</th><th></th></tr></thead>
+          <tbody id="compras-tbody"><tr><td colspan="8"><div class="empty"><div class="ei">🛒</div><h3>Nenhuma compra</h3><p>Registre entradas de materiais.</p></div></td></tr></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- CMV -->
+    <section class="section" id="section-cmv">
+      <div class="panel">
+        <div class="panel-hdr"><span class="panel-ttl">📈 Cálculo de CMV por Período</span></div>
+        <div class="panel-body">
+          <div style="max-width:360px;margin-bottom:18px">
+            <div class="fg" style="margin:0"><label>Selecionar Período</label>
+            <select id="cmv-sel" onchange="renderCMV()"><option value="">— Selecione —</option></select></div>
+          </div>
+          <div id="cmv-body"><div class="empty"><div class="ei">📊</div><h3>Selecione um período</h3><p>Escolha acima para ver o CMV.</p></div></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-hdr"><span class="panel-ttl">Histórico de CMV</span></div>
+        <div class="tbl-wrap">
+          <table><thead><tr><th>Período</th><th>Tipo</th><th>Est. Inicial</th><th>Compras</th><th>Est. Final</th><th>CMV</th></tr></thead>
+          <tbody id="cmv-hist"></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- PRODUTOS -->
+    <section class="section" id="section-produtos">
+      <div class="panel">
+        <div class="panel-hdr"><span class="panel-ttl">Produtos (<span id="prod-count">0</span>)</span><button class="btn btn-primary" onclick="openProductModal()">+ Novo Produto</button></div>
+        <div style="padding:14px 18px 0">
+          <div class="filter-bar">
+            <button class="fpill active" id="fp-all" onclick="setProdCat('',this)">Todos</button>
+            <button class="fpill" onclick="setProdCat('Diversas',this)">Diversas</button>
+            <button class="fpill" onclick="setProdCat('Bioquímicos',this)">Bioquímicos</button>
+            <button class="fpill" onclick="setProdCat('Teste Rápido',this)">Teste Rápido</button>
+            <button class="fpill" onclick="setProdCat('Reagentes',this)">Reagentes</button>
+          </div>
+          <div class="search-wrap"><span class="search-ico">🔍</span><input type="text" id="prod-search" placeholder="Buscar produto..." oninput="renderProducts()"></div>
+        </div>
+        <div class="tbl-wrap">
+          <table><thead><tr><th>Nome</th><th>Categoria</th><th>Unidade</th><th>Est. Mínimo</th><th>Custo Unit.</th><th>Fornecedores</th><th>Ações</th></tr></thead>
+          <tbody id="prod-tbody"></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- FORNECEDORES -->
+    <section class="section" id="section-fornecedores">
+      <div class="panel">
+        <div class="panel-hdr"><span class="panel-ttl">Fornecedores</span><button class="btn btn-primary" onclick="openSupplierModal()">+ Novo Fornecedor</button></div>
+        <div class="tbl-wrap">
+          <table><thead><tr><th>Nome</th><th>Contato</th><th>Telefone</th><th>Produtos</th><th>Ações</th></tr></thead>
+          <tbody id="supp-tbody"></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ALERTAS -->
+    <section class="section" id="section-alertas">
+      <div class="panel">
+        <div class="panel-hdr"><span class="panel-ttl">🔔 Itens Abaixo do Estoque Mínimo</span></div>
+        <div class="tbl-wrap">
+          <table><thead><tr><th>Produto</th><th>Categoria</th><th>Qtd Atual</th><th>Est. Mínimo</th><th>Déficit</th><th>Fornecedor Principal</th><th>Telefone</th></tr></thead>
+          <tbody id="alert-tbody"><tr><td colspan="7"><div class="empty"><div class="ei">✅</div><h3>Tudo em dia!</h3><p>Nenhum item abaixo do mínimo.</p></div></td></tr></tbody></table>
+        </div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<!-- ── MODAIS ──────────────────────────────────────────────── -->
+
+<!-- PERÍODO -->
+<div class="mo" id="m-period">
+  <div class="modal">
+    <div class="modal-hdr"><h3>Criar Novo Período</h3><button class="modal-x" onclick="closeM('m-period')">×</button></div>
+    <div class="modal-body">
+      <div class="fg"><label>Tipo de Período *</label>
+        <select id="p-type" onchange="togglePeriodForm()">
+          <option value="semanal">Semanal</option>
+          <option value="mensal">Mensal</option>
+          <option value="implantacao">Implantação — Estoque Inicial</option>
+        </select>
+      </div>
+      <div class="fr" id="p-dates">
+        <div class="fg" style="margin:0"><label>Início *</label><input type="date" id="p-start"></div>
+        <div class="fg" style="margin:0" id="p-end-grp"><label>Fim *</label><input type="date" id="p-end"></div>
+      </div>
+      <div class="alert alert-warn" id="p-imp-note" style="display:none;margin-top:12px">
+        <span>⚠️</span><span>Implantação: registra o estoque atual como ponto de partida. Apenas contagem de abertura.</span>
+      </div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-outline" onclick="closeM('m-period')">Cancelar</button><button class="btn btn-primary" onclick="savePeriod()">Criar Período</button></div>
+  </div>
+</div>
+
+<!-- CONTAGEM -->
+<div class="mo" id="m-count">
+  <div class="modal modal-xl">
+    <div class="modal-hdr"><div><h3>Nova Contagem de Estoque</h3><div class="msub">Preencha as quantidades de cada item</div></div><button class="modal-x" onclick="closeM('m-count')">×</button></div>
+    <div class="modal-body">
+      <div class="fr3" style="margin-bottom:14px">
+        <div class="fg" style="margin:0"><label>Período *</label><select id="cnt-period" onchange="onCountPeriodChange()"><option value="">— Selecione —</option></select></div>
+        <div class="fg" style="margin:0"><label>Tipo *</label><select id="cnt-type"><option value="abertura">Abertura</option><option value="fechamento">Fechamento</option></select></div>
+        <div class="fg" style="margin:0"><label>Data *</label><input type="date" id="cnt-date"></div>
+      </div>
+      <div class="divider"></div>
+      <div class="filter-bar" id="cnt-filters">
+        <button class="fpill active" onclick="filterCntTable('',this)">Todos</button>
+        <button class="fpill" onclick="filterCntTable('Diversas',this)">Diversas</button>
+        <button class="fpill" onclick="filterCntTable('Bioquímicos',this)">Bioquímicos</button>
+        <button class="fpill" onclick="filterCntTable('Teste Rápido',this)">Teste Rápido</button>
+        <button class="fpill" onclick="filterCntTable('Reagentes',this)">Reagentes</button>
+      </div>
+      <div class="cnt-scroll">
+        <table>
+          <thead><tr><th>Produto</th><th>Cat.</th><th>Un.</th><th>Custo</th><th style="text-align:center">Fechado</th><th style="text-align:center">Aberto</th><th style="text-align:center">Total</th><th style="text-align:right">Valor</th></tr></thead>
+          <tbody id="cnt-tbody"></tbody>
+          <tfoot><tr style="background:#F8FAFC;border-top:2px solid var(--border)">
+            <td colspan="6" style="padding:10px 14px;font-weight:600">Total Geral</td>
+            <td style="padding:10px 14px;text-align:center;font-weight:700" id="cnt-tot-qty">0</td>
+            <td style="padding:10px 14px;text-align:right;font-weight:700;color:var(--primary);font-family:'DM Mono',monospace" id="cnt-tot-val">R$ 0,00</td>
+          </tr></tfoot>
+        </table>
+      </div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-outline" onclick="closeM('m-count')">Cancelar</button><button class="btn btn-primary" onclick="saveCount()">Salvar Contagem</button></div>
+  </div>
+</div>
+
+<!-- COMPRA -->
+<div class="mo" id="m-purchase">
+  <div class="modal">
+    <div class="modal-hdr"><h3>Registrar Compra</h3><button class="modal-x" onclick="closeM('m-purchase')">×</button></div>
+    <div class="modal-body">
+      <div class="fr">
+        <div class="fg"><label>Data *</label><input type="date" id="pu-date"></div>
+        <div class="fg"><label>Período *</label><select id="pu-period"><option value="">— Selecione —</option></select></div>
+      </div>
+      <div class="fg"><label>Produto *</label><select id="pu-product" onchange="onPurchaseProduct()"><option value="">— Selecione —</option></select></div>
+      <div class="fg"><label>Fornecedor</label><select id="pu-supplier"><option value="">— Selecione —</option></select></div>
+      <div class="fr">
+        <div class="fg"><label>Quantidade *</label><input type="number" id="pu-qty" min="1" value="1" oninput="calcPuTotal()"></div>
+        <div class="fg"><label>Custo Unitário (R$) *</label><input type="number" id="pu-cost" min="0" step="0.01" value="0" oninput="calcPuTotal()"></div>
+      </div>
+      <div class="fg"><label>Total da Compra</label><input type="text" id="pu-total" readonly style="font-weight:700;color:var(--primary)"></div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-outline" onclick="closeM('m-purchase')">Cancelar</button><button class="btn btn-primary" onclick="savePurchase()">Registrar</button></div>
+  </div>
+</div>
+
+<!-- PRODUTO -->
+<div class="mo" id="m-product">
+  <div class="modal">
+    <div class="modal-hdr"><h3 id="prod-m-title">Novo Produto</h3><button class="modal-x" onclick="closeM('m-product')">×</button></div>
+    <div class="modal-body">
+      <input type="hidden" id="prod-m-id">
+      <div class="fg"><label>Nome *</label><input type="text" id="prod-m-name"></div>
+      <div class="fr">
+        <div class="fg"><label>Categoria *</label><select id="prod-m-cat"><option value="">Selecione...</option><option>Diversas</option><option>Bioquímicos</option><option>Teste Rápido</option><option>Reagentes</option></select></div>
+        <div class="fg"><label>Unidade *</label><select id="prod-m-unit"><option>Unidade</option><option>Caixa</option><option>Litro</option><option>Pacote</option><option>Pacotes</option></select></div>
+      </div>
+      <div class="fr">
+        <div class="fg"><label>Est. Mínimo</label><input type="number" id="prod-m-min" value="1" min="0"></div>
+        <div class="fg"><label>Custo Unit. (R$)</label><input type="number" id="prod-m-cost" value="0" min="0" step="0.01"></div>
+      </div>
+      <div class="fg"><label>Fornecedores (Ctrl+clique = múltiplos)</label><select id="prod-m-supps" multiple></select></div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-outline" onclick="closeM('m-product')">Cancelar</button><button class="btn btn-primary" onclick="saveProduct()">Salvar</button></div>
+  </div>
+</div>
+
+<!-- FORNECEDOR -->
+<div class="mo" id="m-supplier">
+  <div class="modal" style="max-width:440px">
+    <div class="modal-hdr"><h3 id="supp-m-title">Novo Fornecedor</h3><button class="modal-x" onclick="closeM('m-supplier')">×</button></div>
+    <div class="modal-body">
+      <input type="hidden" id="supp-m-id">
+      <div class="fg"><label>Nome *</label><input type="text" id="supp-m-name"></div>
+      <div class="fr">
+        <div class="fg"><label>Contato</label><input type="text" id="supp-m-contact"></div>
+        <div class="fg"><label>Telefone</label><input type="text" id="supp-m-phone"></div>
+      </div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-outline" onclick="closeM('m-supplier')">Cancelar</button><button class="btn btn-primary" onclick="saveSupplier()">Salvar</button></div>
+  </div>
+</div>
+
+<!-- ── JAVASCRIPT ──────────────────────────────────────────── -->
+<script>
+// ─── SUPABASE CLIENT ──────────────────────────────────────────
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ─── STATE ────────────────────────────────────────────────────
+let S = { products:[], suppliers:[], periods:[], counts:[], purchases:[] };
+let prodCatFilter = '';
+let _loading = false;
+
+// ─── LOADING & TOAST ──────────────────────────────────────────
+function setLoading(v) {
+  _loading = v;
+  document.getElementById('loader').style.display = v ? 'flex' : 'none';
+}
+function toast(msg, type='ok') {
+  const el = document.createElement('div');
+  el.className = 'toast-item toast-' + type;
+  el.textContent = msg;
+  document.getElementById('toast').appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+// ─── DATA LOADING ─────────────────────────────────────────────
+async function loadAll() {
+  setLoading(true);
+  try {
+    await Promise.all([loadSuppliers(), loadProducts(), loadPeriods(), loadCounts(), loadPurchases()]);
+    renderAll();
+  } catch(e) {
+    console.error(e);
+    toast('Erro ao carregar dados: ' + e.message, 'err');
+  } finally {
+    setLoading(false);
+  }
+}
+
+async function loadSuppliers() {
+  const {data,error} = await sb.from('suppliers').select('*').order('name');
+  if(error) throw error;
+  S.suppliers = data;
+}
+
+async function loadProducts() {
+  const [{data:prods,error:e1},{data:ps,error:e2}] = await Promise.all([
+    sb.from('products').select('*').eq('active',true).order('name'),
+    sb.from('product_suppliers').select('*')
+  ]);
+  if(e1) throw e1; if(e2) throw e2;
+  S.products = prods.map(p=>({...p, cat:p.cat, min:p.min_stock, cost:p.unit_cost,
+    supps: ps.filter(x=>x.product_id===p.id).map(x=>x.supplier_id)}));
+}
+
+async function loadPeriods() {
+  const {data,error} = await sb.from('periods').select('*').order('created_at',{ascending:false});
+  if(error) throw error;
+  S.periods = data.map(p=>({...p, start:p.start_date, end:p.end_date, typeLabel:p.type_label,
+    openCountId:p.open_count_id, closeCountId:p.close_count_id}));
+}
+
+async function loadCounts() {
+  const {data,error} = await sb.from('stock_counts')
+    .select('*, count_items(*)').order('date',{ascending:false});
+  if(error) throw error;
+  S.counts = data.map(c=>({...c, periodId:c.period_id,
+    items:(c.count_items||[]).map(i=>({pid:i.product_id,f:i.qty_closed,a:i.qty_open,total:i.total,snap:i.cost_snapshot}))}));
+}
+
+async function loadPurchases() {
+  const {data,error} = await sb.from('purchases').select('*').order('date',{ascending:false});
+  if(error) throw error;
+  S.purchases = data.map(p=>({...p, periodId:p.period_id, prodId:p.product_id, suppId:p.supplier_id}));
+}
+
+// ─── REAL-TIME SUBSCRIPTION ───────────────────────────────────
+function startRealtime() {
+  sb.channel('petlab-sync')
+    .on('postgres_changes', {event:'*', schema:'public'}, () => {
+      loadAll().then(() => toast('Dados atualizados', 'ok'));
+    })
+    .subscribe(status => {
+      const dot = document.getElementById('rt-dot');
+      dot.style.display = (status === 'SUBSCRIBED') ? 'block' : 'none';
+    });
+}
+
+// ─── RENDER ALL ───────────────────────────────────────────────
+function renderAll() {
+  renderProducts(); renderSuppliers(); renderPeriods();
+  renderCounts(); renderPurchases(); renderDashboard(); updateAlertBadge();
+}
+
+// ─── NAVIGATION ───────────────────────────────────────────────
+const PT = {dashboard:'Dashboard',periodos:'Períodos',contagem:'Contagem de Estoque',
+  compras:'Compras',cmv:'CMV — Custo das Mercadorias Vendidas',
+  produtos:'Produtos',fornecedores:'Fornecedores',alertas:'Alertas de Estoque'};
+
+function go(page) {
+  document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.getElementById('section-'+page).classList.add('active');
+  document.getElementById('nav-'+page)?.classList.add('active');
+  document.getElementById('page-title').textContent = PT[page]||page;
+  const acts={periodos:'<button class="btn btn-primary" onclick="openPeriodModal()">+ Novo Período</button>',
+    contagem:'<button class="btn btn-primary" onclick="openCountModal()">+ Nova Contagem</button>',
+    compras:'<button class="btn btn-primary" onclick="openPurchaseModal()">+ Registrar Compra</button>',
+    produtos:'<button class="btn btn-primary" onclick="openProductModal()">+ Novo Produto</button>',
+    fornecedores:'<button class="btn btn-primary" onclick="openSupplierModal()">+ Novo Fornecedor</button>'};
+  document.getElementById('page-actions').innerHTML = acts[page]||'';
+  if(page==='cmv') refreshCMVSelect();
+  if(page==='alertas') renderAlerts();
+  if(page==='dashboard') renderDashboard();
+}
+
+// ─── DASHBOARD ────────────────────────────────────────────────
+function renderDashboard() {
+  const last = S.counts.length ? S.counts[0] : null;
+  document.getElementById('d-estoque').textContent = last ? R(countVal(last)) : '—';
+  document.getElementById('d-estoque-sub').textContent = last ? 'Contagem em '+fmtDate(last.date) : 'Nenhuma contagem';
+  const closed = S.periods.filter(p=>p.status==='fechado');
+  if(closed.length>0){
+    const lp=closed[0]; const cmv=calcCMV(lp.id);
+    document.getElementById('d-cmv').textContent = cmv!==null?R(cmv):'—';
+    document.getElementById('d-cmv-sub').textContent = 'Período: '+lp.label;
+  }
+  const active=S.periods.find(p=>p.status==='aberto');
+  if(active){
+    document.getElementById('d-period').textContent=active.label;
+    document.getElementById('d-period-sub').textContent=active.typeLabel+' · '+fmtDate(active.start)+(active.end?' – '+fmtDate(active.end):'');
+  } else {
+    document.getElementById('d-period').textContent='Nenhum';
+    document.getElementById('d-period-sub').textContent='Crie um período para começar';
+  }
+  const alerts=getLowAlerts();
+  document.getElementById('d-alerts').textContent=alerts.length;
+  document.getElementById('d-alerts').closest('.stat-card').className='stat-card '+(alerts.length>0?'c-danger':'c-ok');
+  const atb=document.getElementById('d-alerts-tbody');
+  atb.innerHTML=alerts.length===0
+    ? '<tr><td colspan="4"><div class="empty" style="padding:16px"><div class="ei">✅</div><p>Nenhum alerta</p></div></td></tr>'
+    : alerts.slice(0,8).map(a=>`<tr><td><strong>${a.p.name}</strong></td><td class="text-danger fw6">${a.qty}</td><td>${a.p.min}</td><td>${a.sName}</td></tr>`).join('');
+  const pdiv=document.getElementById('d-periods');
+  pdiv.innerHTML=S.periods.length===0
+    ? '<div class="empty" style="padding:16px"><div class="ei">📅</div><p>Nenhum período criado</p></div>'
+    : S.periods.slice(0,5).map(p=>`<div class="pi"><div class="pi-dot ${p.status}"></div><div style="flex:1"><div class="fw6" style="font-size:13px">${p.label}</div><div style="font-size:11.5px;color:var(--muted)">${p.typeLabel} · ${fmtDate(p.start)}${p.end?' – '+fmtDate(p.end):''}</div></div><span class="badge ${p.status==='aberto'?'b-ok':'b-gray'}">${p.status==='aberto'?'Ativo':'Fechado'}</span></div>`).join('');
+  updateAlertBadge();
+}
+
+// ─── PERIODS ──────────────────────────────────────────────────
+function openPeriodModal(){
+  document.getElementById('p-type').value='semanal';
+  document.getElementById('p-start').value=today();
+  document.getElementById('p-end').value='';
+  togglePeriodForm(); openM('m-period');
+}
+function togglePeriodForm(){
+  const t=document.getElementById('p-type').value;
+  document.getElementById('p-imp-note').style.display=t==='implantacao'?'flex':'none';
+  document.getElementById('p-end-grp').style.display=t==='implantacao'?'none':'block';
+}
+async function savePeriod(){
+  const type=document.getElementById('p-type').value;
+  const start=document.getElementById('p-start').value;
+  const end=document.getElementById('p-end').value;
+  if(!start){alert('Informe a data de início.');return;}
+  if(type!=='implantacao'&&!end){alert('Informe a data de fim.');return;}
+  const lblMap={semanal:'Semanal',mensal:'Mensal',implantacao:'Implantação'};
+  let label;
+  if(type==='implantacao') label='Implantação — '+fmtDate(start);
+  else if(type==='semanal') label='Semana '+fmtDate(start)+' – '+fmtDate(end);
+  else {const d=new Date(start+'T12:00:00');label=d.toLocaleString('pt-BR',{month:'long',year:'numeric'});label=label.charAt(0).toUpperCase()+label.slice(1);}
+  setLoading(true);
+  const {error}=await sb.from('periods').insert({type,type_label:lblMap[type],label,start_date:start,end_date:type==='implantacao'?null:end,status:'aberto'});
+  if(error){setLoading(false);alert('Erro: '+error.message);return;}
+  closeM('m-period'); toast('Período criado!');
+  await loadAll(); setLoading(false);
+}
+async function closePeriod(id){
+  const p=S.periods.find(x=>x.id===id);
+  if(!p) return;
+  if(!p.openCountId){alert('Período sem contagem de abertura.');return;}
+  if(p.type!=='implantacao'&&!p.closeCountId){alert('Período sem contagem de fechamento.');return;}
+  if(!confirm(`Fechar o período "${p.label}"? Esta ação é definitiva.`)) return;
+  setLoading(true);
+  await sb.from('periods').update({status:'fechado'}).eq('id',id);
+  toast('Período fechado!'); await loadAll(); setLoading(false);
+}
+async function deletePeriod(id){
+  if(!confirm('Excluir este período e todos os seus dados?')) return;
+  setLoading(true);
+  await sb.from('periods').delete().eq('id',id);
+  toast('Período excluído.'); await loadAll(); setLoading(false);
+}
+function renderPeriods(){
+  const tb=document.getElementById('periodos-tbody');
+  if(!S.periods.length){tb.innerHTML='<tr><td colspan="9"><div class="empty"><div class="ei">📅</div><h3>Nenhum período</h3><p>Crie um período para começar.</p></div></td></tr>';return;}
+  tb.innerHTML=S.periods.map(p=>{
+    const oc=p.openCountId?S.counts.find(c=>c.id===p.openCountId):null;
+    const cc=p.closeCountId?S.counts.find(c=>c.id===p.closeCountId):null;
+    const cmv=p.status==='fechado'?calcCMV(p.id):null;
+    let acts='';
+    if(p.status==='aberto'){
+      if(p.openCountId&&(p.type==='implantacao'||p.closeCountId))
+        acts+=`<button class="btn btn-sm btn-primary" onclick="closePeriod(${p.id})">Fechar</button> `;
+      acts+=`<button class="btn btn-sm btn-outline" onclick="deletePeriod(${p.id})" style="color:var(--danger)">✕</button>`;
+    }
+    return `<tr>
+      <td><strong>${p.label}</strong></td>
+      <td><span class="badge b-primary">${p.typeLabel}</span></td>
+      <td>${fmtDate(p.start)}</td><td>${p.end?fmtDate(p.end):'—'}</td>
+      <td><span class="badge ${p.status==='aberto'?'b-ok':'b-gray'}">${p.status==='aberto'?'Ativo':'Fechado'}</span></td>
+      <td>${oc?`<span class="badge b-ok">✓ ${fmtDate(oc.date)}</span>`:'<span class="badge b-warn">Pendente</span>'}</td>
+      <td>${p.type==='implantacao'?'<span class="badge b-gray">N/A</span>':cc?`<span class="badge b-ok">✓ ${fmtDate(cc.date)}</span>`:'<span class="badge b-warn">Pendente</span>'}</td>
+      <td class="mono fw7">${cmv!==null?R(cmv):'—'}</td>
+      <td>${acts}</td></tr>`;
+  }).join('');
+}
+
+// ─── STOCK COUNTS ─────────────────────────────────────────────
+function openCountModal(){
+  const ps=S.periods.filter(p=>p.status==='aberto');
+  document.getElementById('cnt-period').innerHTML='<option value="">— Selecione —</option>'+ps.map(p=>`<option value="${p.id}">${p.label}</option>`).join('');
+  document.getElementById('cnt-date').value=today();
+  buildCountTable(); openM('m-count');
+}
+function onCountPeriodChange(){
+  const pid=parseInt(document.getElementById('cnt-period').value);
+  const p=S.periods.find(x=>x.id===pid); if(!p) return;
+  const ts=document.getElementById('cnt-type');
+  if(p.type==='implantacao'){ts.innerHTML='<option value="abertura">Implantação (Estoque Inicial)</option>';}
+  else{const h=!!p.openCountId;ts.innerHTML=`<option value="abertura"${h?' disabled':''}>Abertura${h?' (✓ feita)':''}</option><option value="fechamento"${!h?' disabled':''}>Fechamento${!h?' (aguarda abertura)':''}</option>`;ts.value=h?'fechamento':'abertura';}
+}
+function buildCountTable(){
+  const ccol={Diversas:'b-gray',Bioquímicos:'b-primary','Teste Rápido':'b-ok',Reagentes:'b-warn'};
+  document.getElementById('cnt-tbody').innerHTML=S.products.filter(p=>p.active).map(p=>`
+    <tr data-cat="${p.cat}">
+      <td><strong>${p.name}</strong></td>
+      <td><span class="badge ${ccol[p.cat]||'b-gray'}" style="font-size:10px">${p.cat}</span></td>
+      <td style="color:var(--muted)">${p.unit}</td>
+      <td class="mono" style="color:var(--muted)">${p.cost>0?R(p.cost):'—'}</td>
+      <td style="text-align:center"><input type="number" class="cnt-input" id="cf-${p.id}" min="0" value="0" oninput="updRow(${p.id})"></td>
+      <td style="text-align:center"><input type="number" class="cnt-input" id="ca-${p.id}" min="0" value="0" oninput="updRow(${p.id})"></td>
+      <td style="text-align:center;font-weight:700" id="ct-${p.id}">0</td>
+      <td style="text-align:right;font-family:'DM Mono',monospace" id="cv-${p.id}">${R(0)}</td>
+    </tr>`).join('');
+  updTotals();
+}
+function filterCntTable(cat,btn){
+  document.querySelectorAll('#cnt-filters .fpill').forEach(b=>b.classList.remove('active')); btn.classList.add('active');
+  document.querySelectorAll('#cnt-tbody tr').forEach(r=>{r.style.display=(!cat||r.dataset.cat===cat)?'':'none';});
+}
+function updRow(pid){
+  const f=parseInt(document.getElementById('cf-'+pid)?.value)||0;
+  const a=parseInt(document.getElementById('ca-'+pid)?.value)||0;
+  const p=S.products.find(x=>x.id===pid);
+  document.getElementById('ct-'+pid).textContent=f+a;
+  document.getElementById('cv-'+pid).textContent=R((f+a)*(p?p.cost:0));
+  updTotals();
+}
+function updTotals(){
+  let q=0,v=0;
+  S.products.filter(p=>p.active).forEach(p=>{const f=parseInt(document.getElementById('cf-'+p.id)?.value)||0,a=parseInt(document.getElementById('ca-'+p.id)?.value)||0;q+=f+a;v+=(f+a)*p.cost;});
+  document.getElementById('cnt-tot-qty').textContent=q;
+  document.getElementById('cnt-tot-val').textContent=R(v);
+}
+async function saveCount(){
+  const periodId=parseInt(document.getElementById('cnt-period').value);
+  const type=document.getElementById('cnt-type').value;
+  const date=document.getElementById('cnt-date').value;
+  if(!periodId||isNaN(periodId)){alert('Selecione um período.');return;}
+  if(!date){alert('Informe a data.');return;}
+  setLoading(true);
+  try{
+    const {data:cnt,error:e1}=await sb.from('stock_counts').insert({period_id:periodId,type,date}).select().single();
+    if(e1) throw e1;
+    const items=S.products.filter(p=>p.active).map(p=>{
+      const f=parseInt(document.getElementById('cf-'+p.id)?.value)||0;
+      const a=parseInt(document.getElementById('ca-'+p.id)?.value)||0;
+      return {count_id:cnt.id,product_id:p.id,qty_closed:f,qty_open:a,total:f+a,cost_snapshot:p.cost};
+    });
+    const {error:e2}=await sb.from('count_items').insert(items);
+    if(e2) throw e2;
+    const field=(type==='fechamento')?'close_count_id':'open_count_id';
+    await sb.from('periods').update({[field]:cnt.id}).eq('id',periodId);
+    closeM('m-count'); toast('Contagem salva!');
+    await loadAll();
+  }catch(e){alert('Erro: '+e.message);}
+  finally{setLoading(false);}
+}
+async function deleteCount(id){
+  if(!confirm('Excluir esta contagem?')) return;
+  const cnt=S.counts.find(c=>c.id===id);
+  if(cnt){
+    const p=S.periods.find(x=>x.id===cnt.periodId);
+    if(p){
+      if(p.openCountId===id) await sb.from('periods').update({open_count_id:null}).eq('id',p.id);
+      if(p.closeCountId===id) await sb.from('periods').update({close_count_id:null}).eq('id',p.id);
+    }
+  }
+  setLoading(true);
+  await sb.from('stock_counts').delete().eq('id',id);
+  toast('Contagem excluída.'); await loadAll(); setLoading(false);
+}
+function renderCounts(){
+  const tb=document.getElementById('contagem-tbody');
+  if(!S.counts.length){tb.innerHTML='<tr><td colspan="6"><div class="empty"><div class="ei">📋</div><h3>Nenhuma contagem</h3><p>Faça a primeira contagem.</p></div></td></tr>';return;}
+  const lbls={abertura:'Abertura',fechamento:'Fechamento',implantacao:'Implantação'};
+  tb.innerHTML=S.counts.map(c=>{
+    const p=S.periods.find(x=>x.id===c.periodId);
+    return `<tr><td>${fmtDate(c.date)}</td><td>${p?p.label:'—'}</td>
+    <td><span class="badge ${c.type==='fechamento'?'b-ok':'b-primary'}">${lbls[c.type]||c.type}</span></td>
+    <td>${c.items.filter(i=>i.total>0).length} itens</td>
+    <td class="mono fw6 text-primary">${R(countVal(c))}</td>
+    <td><button class="btn btn-sm btn-outline" style="color:var(--danger)" onclick="deleteCount(${c.id})">✕ Excluir</button></td></tr>`;
+  }).join('');
+}
+
+// ─── PURCHASES ────────────────────────────────────────────────
+function openPurchaseModal(){
+  document.getElementById('pu-date').value=today();
+  const ps=S.periods.filter(p=>p.status==='aberto');
+  document.getElementById('pu-period').innerHTML='<option value="">— Selecione —</option>'+ps.map(p=>`<option value="${p.id}">${p.label}</option>`).join('');
+  document.getElementById('pu-product').innerHTML='<option value="">— Selecione —</option>'+S.products.filter(p=>p.active).sort((a,b)=>a.name.localeCompare(b.name)).map(p=>`<option value="${p.id}">${p.name} (${p.cat})</option>`).join('');
+  document.getElementById('pu-supplier').innerHTML='<option value="">— Selecione —</option>'+S.suppliers.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+  document.getElementById('pu-qty').value=1; document.getElementById('pu-cost').value=0; document.getElementById('pu-total').value='R$ 0,00';
+  openM('m-purchase');
+}
+function onPurchaseProduct(){
+  const pid=parseInt(document.getElementById('pu-product').value);
+  const p=S.products.find(x=>x.id===pid);
+  if(p){document.getElementById('pu-cost').value=p.cost;if(p.supps.length)document.getElementById('pu-supplier').value=p.supps[0];calcPuTotal();}
+}
+function calcPuTotal(){
+  const q=parseFloat(document.getElementById('pu-qty').value)||0;
+  const c=parseFloat(document.getElementById('pu-cost').value)||0;
+  document.getElementById('pu-total').value=R(q*c);
+}
+async function savePurchase(){
+  const periodId=parseInt(document.getElementById('pu-period').value);
+  const prodId=parseInt(document.getElementById('pu-product').value);
+  const suppId=parseInt(document.getElementById('pu-supplier').value)||null;
+  const date=document.getElementById('pu-date').value;
+  const qty=parseFloat(document.getElementById('pu-qty').value)||0;
+  const cost=parseFloat(document.getElementById('pu-cost').value)||0;
+  if(!periodId||isNaN(periodId)){alert('Selecione um período.');return;}
+  if(!prodId||isNaN(prodId)){alert('Selecione um produto.');return;}
+  if(!date){alert('Informe a data.');return;}
+  if(qty<=0){alert('Quantidade deve ser maior que zero.');return;}
+  setLoading(true);
+  const {error}=await sb.from('purchases').insert({period_id:periodId,product_id:prodId,supplier_id:suppId,date,qty,cost,total:qty*cost});
+  if(!error&&cost>0) await sb.from('products').update({unit_cost:cost}).eq('id',prodId);
+  if(error){setLoading(false);alert('Erro: '+error.message);return;}
+  closeM('m-purchase'); toast('Compra registrada!'); await loadAll(); setLoading(false);
+}
+async function deletePurchase(id){
+  if(!confirm('Excluir esta compra?')) return;
+  setLoading(true);
+  await sb.from('purchases').delete().eq('id',id);
+  toast('Compra excluída.'); await loadAll(); setLoading(false);
+}
+function renderPurchases(){
+  const tb=document.getElementById('compras-tbody');
+  if(!S.purchases.length){tb.innerHTML='<tr><td colspan="8"><div class="empty"><div class="ei">🛒</div><h3>Nenhuma compra</h3><p>Registre entradas de materiais.</p></div></td></tr>';return;}
+  tb.innerHTML=S.purchases.map(c=>{
+    const prod=S.products.find(p=>p.id===c.prodId);
+    const supp=S.suppliers.find(s=>s.id===c.suppId);
+    const per=S.periods.find(p=>p.id===c.periodId);
+    return `<tr><td>${fmtDate(c.date)}</td><td><strong>${prod?prod.name:'—'}</strong></td>
+    <td>${supp?supp.name:'—'}</td><td>${c.qty}</td>
+    <td class="mono">${R(c.cost)}</td><td class="mono fw6 text-primary">${R(c.total)}</td>
+    <td style="font-size:12px;color:var(--muted)">${per?per.label:'—'}</td>
+    <td><button class="btn btn-sm btn-outline" style="color:var(--danger)" onclick="deletePurchase(${c.id})">✕</button></td></tr>`;
+  }).join('');
+}
+
+// ─── CMV ──────────────────────────────────────────────────────
+function countVal(cnt){
+  return cnt.items.reduce((s,i)=>{const snap=i.snap!==undefined?i.snap:(S.products.find(p=>p.id===i.pid)||{cost:0}).cost;return s+i.total*snap;},0);
+}
+function calcCMV(periodId){
+  const p=S.periods.find(x=>x.id===periodId); if(!p) return null;
+  const oc=p.openCountId?S.counts.find(c=>c.id===p.openCountId):null; if(!oc) return null;
+  if(p.type!=='implantacao'&&!p.closeCountId) return null;
+  const cc=p.closeCountId?S.counts.find(c=>c.id===p.closeCountId):null;
+  const pv=S.purchases.filter(x=>x.periodId===periodId).reduce((s,x)=>s+x.total,0);
+  return countVal(oc)+pv-(cc?countVal(cc):0);
+}
+function refreshCMVSelect(){
+  document.getElementById('cmv-sel').innerHTML='<option value="">— Selecione —</option>'+S.periods.map(p=>`<option value="${p.id}">${p.label} (${p.status==='aberto'?'Ativo':'Fechado'})</option>`).join('');
+  renderCMVHistory();
+}
+function renderCMV(){
+  const pid=parseInt(document.getElementById('cmv-sel').value);
+  const body=document.getElementById('cmv-body');
+  if(!pid||isNaN(pid)){body.innerHTML='<div class="empty"><div class="ei">📊</div><h3>Selecione um período</h3></div>';return;}
+  const p=S.periods.find(x=>x.id===pid); if(!p) return;
+  const oc=p.openCountId?S.counts.find(c=>c.id===p.openCountId):null;
+  const cc=p.closeCountId?S.counts.find(c=>c.id===p.closeCountId):null;
+  const ov=oc?countVal(oc):null; const cv=cc?countVal(cc):null;
+  const purch=S.purchases.filter(x=>x.periodId===pid);
+  const pv=purch.reduce((s,x)=>s+x.total,0);
+  const cmv=(ov!==null&&(p.type==='implantacao'||cv!==null))?(ov||0)+pv-(cv||0):null;
+  body.innerHTML=`
+    <div class="alert ${p.status==='aberto'?'alert-warn':'alert-ok'}">${p.status==='aberto'?'⚠️ Período ativo — CMV parcial.':'✅ Período fechado — CMV definitivo.'}</div>
+    <div class="cmv-grid">
+      <div class="cmv-box"><div class="cl">📦 Estoque Inicial</div><div class="cv">${ov!==null?R(ov):'<span style="color:var(--warn)">Pendente</span>'}</div><div style="font-size:11px;color:var(--muted);margin-top:4px">${oc?fmtDate(oc.date):'—'}</div></div>
+      <div class="cmv-box"><div class="cl">🛒 Compras</div><div class="cv">${R(pv)}</div><div style="font-size:11px;color:var(--muted);margin-top:4px">${purch.length} compra${purch.length!==1?'s':''}</div></div>
+      <div class="cmv-box"><div class="cl">📦 Estoque Final</div><div class="cv">${cv!==null?R(cv):p.type==='implantacao'?'<span style="color:var(--muted)">N/A</span>':'<span style="color:var(--warn)">Pendente</span>'}</div><div style="font-size:11px;color:var(--muted);margin-top:4px">${cc?fmtDate(cc.date):'—'}</div></div>
+      <div class="cmv-box hl"><div class="cl">= CMV</div><div class="cv">${cmv!==null?R(cmv):'—'}</div><div style="font-size:10px;color:var(--primary-d);margin-top:4px">Ini. + Compras − Final</div></div>
+    </div>
+    ${purch.length>0?`<div class="panel" style="margin-top:4px"><div class="panel-hdr"><span class="panel-ttl">Compras do Período</span></div><div class="tbl-wrap"><table><thead><tr><th>Data</th><th>Produto</th><th>Fornecedor</th><th>Qtd</th><th>Custo Unit.</th><th>Total</th></tr></thead><tbody>${purch.map(c=>{const pr=S.products.find(x=>x.id===c.prodId);const su=S.suppliers.find(x=>x.id===c.suppId);return `<tr><td>${fmtDate(c.date)}</td><td>${pr?pr.name:'—'}</td><td>${su?su.name:'—'}</td><td>${c.qty}</td><td class="mono">${R(c.cost)}</td><td class="mono fw6 text-primary">${R(c.total)}</td></tr>`;}).join('')}<tr style="background:#F8FAFC"><td colspan="5" style="text-align:right;font-weight:600;padding:9px 14px">Total</td><td class="mono fw7 text-primary" style="padding:9px 14px">${R(pv)}</td></tr></tbody></table></div></div>`:''}`;
+}
+function renderCMVHistory(){
+  const tb=document.getElementById('cmv-hist');
+  const closed=S.periods.filter(p=>p.status==='fechado');
+  if(!closed.length){tb.innerHTML='<tr><td colspan="6"><div class="empty" style="padding:16px"><p>Nenhum período fechado</p></div></td></tr>';return;}
+  tb.innerHTML=closed.map(p=>{
+    const oc=p.openCountId?S.counts.find(c=>c.id===p.openCountId):null;
+    const cc=p.closeCountId?S.counts.find(c=>c.id===p.closeCountId):null;
+    const ov=oc?countVal(oc):0; const cv=cc?countVal(cc):0;
+    const pv=S.purchases.filter(x=>x.periodId===p.id).reduce((s,x)=>s+x.total,0);
+    return `<tr><td><strong>${p.label}</strong></td><td><span class="badge b-primary">${p.typeLabel}</span></td><td class="mono">${R(ov)}</td><td class="mono">${R(pv)}</td><td class="mono">${R(cv)}</td><td class="mono fw7 text-primary">${R(ov+pv-cv)}</td></tr>`;
+  }).join('');
+}
+
+// ─── PRODUCTS ─────────────────────────────────────────────────
+function setProdCat(cat,btn){prodCatFilter=cat;document.querySelectorAll('#section-produtos .fpill').forEach(b=>b.classList.remove('active'));btn.classList.add('active');renderProducts();}
+function renderProducts(){
+  const q=(document.getElementById('prod-search')?.value||'').toLowerCase();
+  let items=S.products.filter(p=>p.active);
+  if(prodCatFilter) items=items.filter(p=>p.cat===prodCatFilter);
+  if(q) items=items.filter(p=>p.name.toLowerCase().includes(q));
+  document.getElementById('prod-count').textContent=items.length;
+  const ccol={Diversas:'b-gray',Bioquímicos:'b-primary','Teste Rápido':'b-ok',Reagentes:'b-warn'};
+  const tb=document.getElementById('prod-tbody');
+  if(!items.length){tb.innerHTML='<tr><td colspan="7"><div class="empty" style="padding:20px"><p>Nenhum produto encontrado</p></div></td></tr>';return;}
+  tb.innerHTML=items.map(p=>{
+    const snames=p.supps.map(sid=>{const s=S.suppliers.find(x=>x.id===sid);return s?s.name:''}).filter(Boolean).join(', ');
+    return `<tr><td><strong>${p.name}</strong></td><td><span class="badge ${ccol[p.cat]||'b-gray'}">${p.cat}</span></td><td style="color:var(--muted)">${p.unit}</td><td>${p.min}</td><td class="mono">${p.cost>0?R(p.cost):'<span class="text-muted">—</span>'}</td><td style="font-size:12px;color:var(--muted);max-width:160px">${snames||'—'}</td><td><button class="btn btn-sm btn-outline" onclick="editProduct(${p.id})">Editar</button><button class="btn btn-sm btn-outline" style="color:var(--danger);margin-left:4px" onclick="delProduct(${p.id})">✕</button></td></tr>`;
+  }).join('');
+}
+function openProductModal(id){
+  const ss=document.getElementById('prod-m-supps');
+  ss.innerHTML=S.suppliers.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+  if(id){const p=S.products.find(x=>x.id===id);document.getElementById('prod-m-title').textContent='Editar Produto';document.getElementById('prod-m-id').value=p.id;document.getElementById('prod-m-name').value=p.name;document.getElementById('prod-m-cat').value=p.cat;document.getElementById('prod-m-unit').value=p.unit;document.getElementById('prod-m-min').value=p.min;document.getElementById('prod-m-cost').value=p.cost;Array.from(ss.options).forEach(o=>o.selected=p.supps.includes(parseInt(o.value)));}
+  else{document.getElementById('prod-m-title').textContent='Novo Produto';['prod-m-id','prod-m-name','prod-m-cat'].forEach(i=>document.getElementById(i).value='');document.getElementById('prod-m-unit').value='Unidade';document.getElementById('prod-m-min').value=1;document.getElementById('prod-m-cost').value=0;Array.from(ss.options).forEach(o=>o.selected=false);}
+  openM('m-product');
+}
+function editProduct(id){openProductModal(id);}
+async function saveProduct(){
+  const id=document.getElementById('prod-m-id').value;
+  const name=document.getElementById('prod-m-name').value.trim();
+  const cat=document.getElementById('prod-m-cat').value;
+  const unit=document.getElementById('prod-m-unit').value;
+  const min=parseFloat(document.getElementById('prod-m-min').value)||0;
+  const cost=parseFloat(document.getElementById('prod-m-cost').value)||0;
+  const supps=Array.from(document.getElementById('prod-m-supps').selectedOptions).map(o=>parseInt(o.value));
+  if(!name){alert('Informe o nome.');return;} if(!cat){alert('Selecione categoria.');return;}
+  setLoading(true);
+  try{
+    let prodId=id?parseInt(id):null;
+    if(id){await sb.from('products').update({name,cat,unit,min_stock:min,unit_cost:cost}).eq('id',prodId);}
+    else{const {data}=await sb.from('products').insert({name,cat,unit,min_stock:min,unit_cost:cost}).select().single();prodId=data.id;}
+    await sb.from('product_suppliers').delete().eq('product_id',prodId);
+    if(supps.length) await sb.from('product_suppliers').insert(supps.map(s=>({product_id:prodId,supplier_id:s})));
+    closeM('m-product'); toast('Produto salvo!'); await loadAll();
+  }catch(e){alert('Erro: '+e.message);}
+  finally{setLoading(false);}
+}
+async function delProduct(id){
+  if(!confirm('Inativar este produto?')) return;
+  setLoading(true);
+  await sb.from('products').update({active:false}).eq('id',id);
+  toast('Produto inativado.'); await loadAll(); setLoading(false);
+}
+
+// ─── SUPPLIERS ────────────────────────────────────────────────
+function renderSuppliers(){
+  const tb=document.getElementById('supp-tbody');
+  tb.innerHTML=S.suppliers.map(s=>{
+    const cnt=S.products.filter(p=>p.active&&p.supps.includes(s.id)).length;
+    return `<tr><td><strong>${s.name}</strong></td><td>${s.contact||'<span class="text-muted">—</span>'}</td><td>${s.phone||'<span class="text-muted">—</span>'}</td><td><span class="badge b-gray">${cnt} produto${cnt!==1?'s':''}</span></td><td><button class="btn btn-sm btn-outline" onclick="editSupplier(${s.id})">Editar</button></td></tr>`;
+  }).join('');
+}
+function openSupplierModal(id){
+  if(id){const s=S.suppliers.find(x=>x.id===id);document.getElementById('supp-m-title').textContent='Editar Fornecedor';document.getElementById('supp-m-id').value=s.id;document.getElementById('supp-m-name').value=s.name;document.getElementById('supp-m-contact').value=s.contact||'';document.getElementById('supp-m-phone').value=s.phone||'';}
+  else{document.getElementById('supp-m-title').textContent='Novo Fornecedor';['supp-m-id','supp-m-name','supp-m-contact','supp-m-phone'].forEach(i=>document.getElementById(i).value='');}
+  openM('m-supplier');
+}
+function editSupplier(id){openSupplierModal(id);}
+async function saveSupplier(){
+  const id=document.getElementById('supp-m-id').value;
+  const name=document.getElementById('supp-m-name').value.trim();
+  const contact=document.getElementById('supp-m-contact').value.trim();
+  const phone=document.getElementById('supp-m-phone').value.trim();
+  if(!name){alert('Informe o nome.');return;}
+  setLoading(true);
+  if(id){await sb.from('suppliers').update({name,contact,phone}).eq('id',parseInt(id));}
+  else{await sb.from('suppliers').insert({name,contact,phone});}
+  closeM('m-supplier'); toast('Fornecedor salvo!'); await loadAll(); setLoading(false);
+}
+
+// ─── ALERTS ───────────────────────────────────────────────────
+function getLowAlerts(){
+  const last=S.counts.length?S.counts[0]:null; if(!last) return [];
+  return S.products.filter(p=>p.active&&p.min>0).map(p=>{
+    const item=last.items.find(i=>i.pid===p.id); const qty=item?item.total:0;
+    if(qty>p.min) return null;
+    const supp=p.supps.length?S.suppliers.find(s=>s.id===p.supps[0]):null;
+    return {p,qty,sName:supp?supp.name:'—',sPhone:supp?.phone||'—'};
+  }).filter(Boolean);
+}
+function updateAlertBadge(){const n=getLowAlerts().length;const b=document.getElementById('alert-badge');b.textContent=n;b.classList.toggle('show',n>0);}
+function renderAlerts(){
+  const alerts=getLowAlerts(); const tb=document.getElementById('alert-tbody');
+  if(!alerts.length){tb.innerHTML='<tr><td colspan="7"><div class="empty"><div class="ei">✅</div><h3>Tudo em dia!</h3><p>Nenhum item abaixo do mínimo.</p></div></td></tr>';return;}
+  const ccol={Diversas:'b-gray',Bioquímicos:'b-primary','Teste Rápido':'b-ok',Reagentes:'b-warn'};
+  tb.innerHTML=alerts.map(a=>`<tr><td><strong>${a.p.name}</strong></td><td><span class="badge ${ccol[a.p.cat]||'b-gray'}" style="font-size:10px">${a.p.cat}</span></td><td><strong class="text-danger">${a.qty}</strong> ${a.p.unit}</td><td>${a.p.min} ${a.p.unit}</td><td><span class="badge b-danger">−${a.p.min-a.qty}</span></td><td>${a.sName}</td><td>${a.sPhone}</td></tr>`).join('');
+}
+
+// ─── UTILS ────────────────────────────────────────────────────
+function R(v){if(v===null||v===undefined||isNaN(v))return '—';return new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(v);}
+function fmtDate(d){if(!d)return '—';return new Date(d+'T12:00:00').toLocaleDateString('pt-BR');}
+function today(){return new Date().toISOString().split('T')[0];}
+function openM(id){document.getElementById(id).classList.add('open');document.body.style.overflow='hidden';}
+function closeM(id){document.getElementById(id).classList.remove('open');document.body.style.overflow='';}
+
+document.querySelectorAll('.mo').forEach(el=>{el.addEventListener('click',function(e){if(e.target===this)closeM(this.id);});});
+
+// ─── INIT ─────────────────────────────────────────────────────
+loadAll().then(startRealtime);
+</script>
+</body>
+</html>
