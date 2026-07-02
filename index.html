@@ -3,12 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PetLab — Controle de Estoque</title>
+<title>PetLab — Controle de Estoque v3</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <style>
-/* ── RESET & VARS ─────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
 :root{
   --bg:#F1F5F9;--sidebar:#0F172A;--sidebar-text:#94A3B8;--sidebar-hover:#1E293B;
@@ -16,24 +15,21 @@
   --warn:#F59E0B;--warn-l:#FEF3C7;--danger:#EF4444;--danger-l:#FEE2E2;
   --ok:#10B981;--ok-l:#D1FAE5;--text:#0F172A;--muted:#64748B;
   --border:#E2E8F0;--radius:10px;
-  --sh:0 1px 3px rgba(0,0,0,.1),0 1px 2px rgba(0,0,0,.06)
+  --sh:0 1px 3px rgba(0,0,0,.1),0 1px 2px rgba(0,0,0,.06);
+  --indigo-l:#EEF2FF;--indigo:#4F46E5
 }
 body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);display:flex;min-height:100vh;font-size:14px}
 
-/* LOADER */
 #loader{position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9999;display:none;align-items:center;justify-content:center;flex-direction:column;gap:12px}
 .spinner{width:40px;height:40px;border:3px solid rgba(255,255,255,.2);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 #loader p{color:#fff;font-size:14px;font-weight:500}
 
-/* TOAST */
 #toast{position:fixed;bottom:24px;right:24px;z-index:9998;display:flex;flex-direction:column;gap:8px}
 .toast-item{padding:12px 18px;border-radius:9px;font-size:13px;font-weight:500;box-shadow:0 4px 20px rgba(0,0,0,.15);animation:slideUp .25s ease;max-width:320px}
-.toast-ok{background:#0D9488;color:#fff}
-.toast-err{background:var(--danger);color:#fff}
+.toast-ok{background:#0D9488;color:#fff}.toast-err{background:var(--danger);color:#fff}
 @keyframes slideUp{from{transform:translateY(12px);opacity:0}to{transform:translateY(0);opacity:1}}
 
-/* SIDEBAR */
 .sidebar{width:240px;min-height:100vh;background:var(--sidebar);position:fixed;left:0;top:0;display:flex;flex-direction:column;z-index:100}
 .sb-logo{padding:22px 20px 18px;border-bottom:1px solid #1E293B}
 .sb-brand{display:flex;align-items:center;gap:10px}
@@ -48,21 +44,17 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);dis
 .nav-item .ni{font-size:16px;width:20px;text-align:center;flex-shrink:0}
 .nav-item .nb{margin-left:auto;background:var(--danger);color:#fff;border-radius:100px;font-size:10px;font-weight:700;padding:1px 6px;min-width:18px;text-align:center;display:none}
 .nav-item .nb.show{display:inline}
-/* real-time indicator */
 .rt-dot{width:7px;height:7px;border-radius:50%;background:#10B981;margin-left:auto;animation:pulse 2s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 
-/* MAIN */
 .main{margin-left:240px;flex:1;min-height:100vh;display:flex;flex-direction:column}
 .topbar{background:var(--white);border-bottom:1px solid var(--border);padding:0 28px;height:58px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50}
 .topbar-title{font-size:17px;font-weight:700;letter-spacing:-.3px}
 .topbar-actions{display:flex;gap:8px;align-items:center}
 .content{padding:26px;flex:1}
 
-/* SECTIONS */
 .section{display:none}.section.active{display:block}
 
-/* STATS */
 .stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:22px}
 .stat-card{background:var(--white);border-radius:var(--radius);padding:18px 20px;box-shadow:var(--sh);border:1px solid var(--border)}
 .stat-card .lbl{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px}
@@ -71,13 +63,11 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);dis
 .stat-card.c-primary .val{color:var(--primary)}.stat-card.c-danger .val{color:var(--danger)}
 .stat-card.c-ok .val{color:var(--ok)}.stat-card.c-warn .val{color:var(--warn)}
 
-/* PANEL */
 .panel{background:var(--white);border-radius:var(--radius);box-shadow:var(--sh);border:1px solid var(--border);overflow:hidden;margin-bottom:20px}
 .panel-hdr{padding:14px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
 .panel-ttl{font-size:14px;font-weight:600}
 .panel-body{padding:20px}
 
-/* TABLE */
 .tbl-wrap{overflow-x:auto}
 table{width:100%;border-collapse:collapse}
 thead th{text-align:left;padding:9px 14px;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;background:#F8FAFC;border-bottom:1px solid var(--border);white-space:nowrap}
@@ -85,19 +75,16 @@ tbody td{padding:11px 14px;border-bottom:1px solid #F1F5F9;color:var(--text);fon
 tbody tr:last-child td{border-bottom:none}
 tbody tr:hover td{background:#F8FAFC}
 
-/* BADGE */
 .badge{display:inline-flex;align-items:center;padding:3px 9px;border-radius:100px;font-size:11px;font-weight:600;white-space:nowrap}
 .b-primary{background:var(--primary-l);color:var(--primary-d)}.b-ok{background:var(--ok-l);color:#065F46}
 .b-warn{background:var(--warn-l);color:#92400E}.b-danger{background:var(--danger-l);color:#991B1B}
-.b-gray{background:#F1F5F9;color:var(--muted)}
+.b-gray{background:#F1F5F9;color:var(--muted)}.b-indigo{background:var(--indigo-l);color:var(--indigo)}
 
-/* BUTTONS */
 .btn{display:inline-flex;align-items:center;gap:6px;padding:7px 15px;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;border:none;transition:all .15s;font-family:'DM Sans',sans-serif;white-space:nowrap}
 .btn-primary{background:var(--primary);color:#fff}.btn-primary:hover{background:var(--primary-d)}
 .btn-outline{background:transparent;border:1.5px solid var(--border);color:var(--text)}.btn-outline:hover{background:#F8FAFC}
 .btn-sm{padding:5px 10px;font-size:12px}
 
-/* FORMS */
 .fg{margin-bottom:14px}
 label{display:block;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px}
 input,select,textarea{width:100%;padding:8px 11px;border:1.5px solid var(--border);border-radius:7px;font-size:13px;font-family:'DM Sans',sans-serif;color:var(--text);background:#fff;transition:border-color .15s}
@@ -105,9 +92,8 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--primary)
 .fr{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .fr3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
 select[multiple]{height:110px}
-input[readonly]{background:#F8FAFC;cursor:default}
+input[readonly]{background:#F8FAFC;cursor:default;color:var(--primary-d);font-weight:600}
 
-/* MODAL */
 .mo{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;display:none;align-items:center;justify-content:center;padding:16px}
 .mo.open{display:flex}
 .modal{background:#fff;border-radius:14px;width:100%;max-width:560px;max-height:92vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.18)}
@@ -119,18 +105,16 @@ input[readonly]{background:#F8FAFC;cursor:default}
 .modal-body{padding:18px 22px}
 .modal-foot{padding:14px 22px 18px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end}
 
-/* ALERTS */
 .alert{display:flex;align-items:flex-start;gap:10px;padding:11px 14px;border-radius:8px;margin-bottom:14px;font-size:13px;line-height:1.4}
 .alert-warn{background:var(--warn-l);border-left:3px solid var(--warn)}
 .alert-ok{background:var(--ok-l);border-left:3px solid var(--ok)}
+.alert-info{background:var(--indigo-l);border-left:3px solid var(--indigo)}
 
-/* EMPTY */
 .empty{text-align:center;padding:40px 20px;color:var(--muted)}
 .empty .ei{font-size:36px;margin-bottom:10px}
 .empty h3{font-size:14px;font-weight:600;margin-bottom:5px;color:var(--text)}
 .empty p{font-size:12.5px}
 
-/* CMV */
 .cmv-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px}
 .cmv-box{background:#F8FAFC;border:1px solid var(--border);border-radius:8px;padding:14px;text-align:center}
 .cmv-box .cl{font-size:10.5px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
@@ -138,50 +122,79 @@ input[readonly]{background:#F8FAFC;cursor:default}
 .cmv-box.hl{background:var(--primary-l);border-color:var(--primary)}
 .cmv-box.hl .cv{color:var(--primary-d)}
 
-/* FILTER PILLS */
 .filter-bar{display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
 .fpill{padding:4px 13px;border-radius:100px;font-size:12px;font-weight:600;cursor:pointer;border:1.5px solid var(--border);background:#fff;color:var(--muted);transition:all .15s}
 .fpill.active,.fpill:hover{background:var(--primary);border-color:var(--primary);color:#fff}
 
-/* SEARCH */
 .search-wrap{position:relative;margin-bottom:14px}
 .search-wrap input{padding-left:34px}
 .search-ico{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:14px;pointer-events:none}
 
-/* PERIOD ITEM */
 .pi{background:#fff;border:1px solid var(--border);border-radius:9px;padding:13px 16px;margin-bottom:10px;display:flex;align-items:center;gap:13px}
 .pi-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
 .pi-dot.aberto{background:var(--ok)}.pi-dot.fechado{background:var(--muted)}
 
-/* COUNT */
 .cnt-input{width:68px;text-align:center;padding:6px 8px;font-size:13px}
 .cnt-scroll{max-height:58vh;overflow-y:auto}
 
-/* MISC */
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
 .divider{height:1px;background:var(--border);margin:14px 0}
 .mono{font-family:'DM Mono',monospace}
 .fw6{font-weight:600}.fw7{font-weight:700}
 .text-ok{color:var(--ok)}.text-danger{color:var(--danger)}
 .text-primary{color:var(--primary)}.text-muted{color:var(--muted)}
+
+/* ── UOM CONVERSION ─────────────────────────────────────────── */
+.uom-pill{display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:5px;font-size:10.5px;font-weight:700;background:var(--indigo-l);color:var(--indigo);border:1px solid #C7D2FE;white-space:nowrap}
+.conv-arrow{color:var(--indigo);font-size:11px;margin:0 2px}
+.conv-hint{font-size:10.5px;color:var(--muted);margin-top:3px;font-style:italic;line-height:1.4}
+.conv-info-box{background:var(--indigo-l);border:1px dashed var(--indigo);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:12.5px;color:var(--indigo);line-height:1.6;display:none}
+.conv-info-box strong{color:#312E81}
+.uom-section-divider{border-top:1px dashed var(--border);margin:12px 0 14px;padding-top:12px}
+.uom-section-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin-bottom:10px}
+.cost-derived{display:flex;align-items:center;gap:8px;background:#F8FAFC;border:1px solid var(--border);border-radius:7px;padding:8px 12px;margin-top:6px}
+.cost-derived .cd-lbl{font-size:11px;color:var(--muted);flex:1}
+.cost-derived .cd-val{font-size:14px;font-weight:700;color:var(--primary-d);font-family:'DM Mono',monospace}
+
+/* ── QUICK EDIT ──────────────────────────────────────────────── */
+.qe-input{width:100%;padding:5px 7px;border:1.5px solid var(--border);border-radius:5px;font-size:12px;font-family:'DM Sans',sans-serif;color:var(--text);background:#fff;transition:border-color .15s}
+.qe-input:focus{outline:none;border-color:var(--primary)}
+.qe-select{width:100%;padding:5px 6px;border:1.5px solid var(--border);border-radius:5px;font-size:12px;font-family:'DM Sans',sans-serif;background:#fff;color:var(--text);transition:border-color .15s}
+.qe-select:focus{outline:none;border-color:var(--primary)}
+.qe-cost{width:100%;padding:5px 7px;background:#F0FDF4;border:1.5px solid #86EFAC;border-radius:5px;font-size:12px;font-family:'DM Mono',monospace;color:#065F46;font-weight:600;cursor:default}
+.qe-scroll{max-height:68vh;overflow-y:auto}
+.qe-warn{background:var(--warn-l);border:1px solid var(--warn);border-radius:7px;padding:10px 14px;font-size:12.5px;color:#92400E;margin-bottom:0}
 </style>
 </head>
 <body>
 
-<!-- ── LOADING OVERLAY ───────────────────────────────────── -->
+<!--
+  ════════════════════════════════════════════════════════════════
+  MIGRAÇÃO SUPABASE — rodar no SQL Editor antes de usar esta v3:
+  ════════════════════════════════════════════════════════════════
+  ALTER TABLE products
+    ADD COLUMN IF NOT EXISTS purchase_unit TEXT DEFAULT 'Unidade',
+    ADD COLUMN IF NOT EXISTS conversion_factor NUMERIC DEFAULT 1,
+    ADD COLUMN IF NOT EXISTS purchase_unit_cost NUMERIC DEFAULT 0;
+
+  -- Retroativamente popula purchase_unit_cost para produtos existentes
+  UPDATE products
+    SET purchase_unit_cost = unit_cost
+    WHERE purchase_unit_cost = 0 AND unit_cost > 0;
+  ════════════════════════════════════════════════════════════════
+-->
+
 <div id="loader"><div class="spinner"></div><p>Sincronizando dados...</p></div>
 <div id="toast"></div>
 
 <!-- ══════════════════════════════════════════════════════════
-     CONFIGURAÇÃO — COLE SUAS CREDENCIAIS DO SUPABASE ABAIXO
+     CREDENCIAIS SUPABASE
 ════════════════════════════════════════════════════════════ -->
 <script>
-const SUPABASE_URL = 'https://mxiqwmjrotjjumsxmprf.supabase.co';      // Ex: https://xyzxyz.supabase.co
-const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';    // Chave anon/public do projeto
+const SUPABASE_URL = 'https://mxiqwmjrotjjumsxmprf.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
 </script>
-<!-- ══════════════════════════════════════════════════════════ -->
 
-<!-- SIDEBAR -->
 <aside class="sidebar">
   <div class="sb-logo">
     <div class="sb-brand">
@@ -191,7 +204,7 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';    // Cha
   </div>
   <nav class="sb-nav">
     <div class="nav-lbl">Principal</div>
-    <div class="nav-item active" id="nav-dashboard" onclick="go('dashboard')"><span class="ni">📊</span>Dashboard<div class="rt-dot" id="rt-dot" title="Sincronização ativa" style="display:none"></div></div>
+    <div class="nav-item active" id="nav-dashboard" onclick="go('dashboard')"><span class="ni">📊</span>Dashboard<div class="rt-dot" id="rt-dot" style="display:none"></div></div>
     <div class="nav-item" id="nav-periodos" onclick="go('periodos')"><span class="ni">📅</span>Períodos</div>
     <div class="nav-item" id="nav-contagem" onclick="go('contagem')"><span class="ni">📋</span>Contagem</div>
     <div class="nav-item" id="nav-compras" onclick="go('compras')"><span class="ni">🛒</span>Compras</div>
@@ -203,7 +216,6 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';    // Cha
   </nav>
 </aside>
 
-<!-- MAIN -->
 <main class="main">
   <header class="topbar">
     <span class="topbar-title" id="page-title">Dashboard</span>
@@ -256,7 +268,7 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';    // Cha
         <div class="panel-hdr"><span class="panel-ttl">Gestão de Períodos</span><button class="btn btn-primary" onclick="openPeriodModal()">+ Novo Período</button></div>
         <div class="tbl-wrap">
           <table><thead><tr><th>Período</th><th>Tipo</th><th>Início</th><th>Fim</th><th>Status</th><th>Abertura</th><th>Fechamento</th><th>CMV</th><th>Ações</th></tr></thead>
-          <tbody id="periodos-tbody"><tr><td colspan="9"><div class="empty"><div class="ei">📅</div><h3>Nenhum período</h3><p>Crie um período para começar.</p></div></td></tr></tbody></table>
+          <tbody id="periodos-tbody"><tr><td colspan="9"><div class="empty"><div class="ei">📅</div><h3>Nenhum período</h3></div></td></tr></tbody></table>
         </div>
       </div>
     </section>
@@ -267,7 +279,7 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';    // Cha
         <div class="panel-hdr"><span class="panel-ttl">Contagens de Estoque</span><button class="btn btn-primary" onclick="openCountModal()">+ Nova Contagem</button></div>
         <div class="tbl-wrap">
           <table><thead><tr><th>Data</th><th>Período</th><th>Tipo</th><th>Itens &gt; 0</th><th>Valor Total</th><th>Ações</th></tr></thead>
-          <tbody id="contagem-tbody"><tr><td colspan="6"><div class="empty"><div class="ei">📋</div><h3>Nenhuma contagem</h3><p>Faça a primeira contagem.</p></div></td></tr></tbody></table>
+          <tbody id="contagem-tbody"></tbody></table>
         </div>
       </div>
     </section>
@@ -277,8 +289,8 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';    // Cha
       <div class="panel">
         <div class="panel-hdr"><span class="panel-ttl">Registro de Compras</span><button class="btn btn-primary" onclick="openPurchaseModal()">+ Registrar Compra</button></div>
         <div class="tbl-wrap">
-          <table><thead><tr><th>Data</th><th>Produto</th><th>Fornecedor</th><th>Qtd</th><th>Custo Unit.</th><th>Total</th><th>Período</th><th></th></tr></thead>
-          <tbody id="compras-tbody"><tr><td colspan="8"><div class="empty"><div class="ei">🛒</div><h3>Nenhuma compra</h3><p>Registre entradas de materiais.</p></div></td></tr></tbody></table>
+          <table><thead><tr><th>Data</th><th>Produto</th><th>Fornecedor</th><th>Qtd Comprada</th><th>Custo/Unid. Compra</th><th>Custo/Unid. Estoque</th><th>Total</th><th>Período</th><th></th></tr></thead>
+          <tbody id="compras-tbody"></tbody></table>
         </div>
       </div>
     </section>
@@ -292,7 +304,7 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';    // Cha
             <div class="fg" style="margin:0"><label>Selecionar Período</label>
             <select id="cmv-sel" onchange="renderCMV()"><option value="">— Selecione —</option></select></div>
           </div>
-          <div id="cmv-body"><div class="empty"><div class="ei">📊</div><h3>Selecione um período</h3><p>Escolha acima para ver o CMV.</p></div></div>
+          <div id="cmv-body"><div class="empty"><div class="ei">📊</div><h3>Selecione um período</h3></div></div>
         </div>
       </div>
       <div class="panel">
@@ -307,10 +319,10 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';    // Cha
     <!-- PRODUTOS -->
     <section class="section" id="section-produtos">
       <div class="panel">
-        <div class="panel-hdr"><span class="panel-ttl">Produtos (<span id="prod-count">0</span>)</span><button class="btn btn-primary" onclick="openProductModal()">+ Novo Produto</button></div>
+        <div class="panel-hdr"><span class="panel-ttl">Produtos (<span id="prod-count">0</span>)</span><div style="display:flex;gap:8px"><button class="btn btn-outline" onclick="openQuickEdit()">⚡ Edição Rápida UOM</button><button class="btn btn-primary" onclick="openProductModal()">+ Novo Produto</button></div></div>
         <div style="padding:14px 18px 0">
           <div class="filter-bar">
-            <button class="fpill active" id="fp-all" onclick="setProdCat('',this)">Todos</button>
+            <button class="fpill active" onclick="setProdCat('',this)">Todos</button>
             <button class="fpill" onclick="setProdCat('Diversas',this)">Diversas</button>
             <button class="fpill" onclick="setProdCat('Bioquímicos',this)">Bioquímicos</button>
             <button class="fpill" onclick="setProdCat('Teste Rápido',this)">Teste Rápido</button>
@@ -319,7 +331,7 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';    // Cha
           <div class="search-wrap"><span class="search-ico">🔍</span><input type="text" id="prod-search" placeholder="Buscar produto..." oninput="renderProducts()"></div>
         </div>
         <div class="tbl-wrap">
-          <table><thead><tr><th>Nome</th><th>Categoria</th><th>Unidade</th><th>Est. Mínimo</th><th>Custo Unit.</th><th>Fornecedores</th><th>Ações</th></tr></thead>
+          <table><thead><tr><th>Nome</th><th>Categoria</th><th>Unid. Compra → Estoque</th><th>Conversão</th><th>Custo/Unid. Estoque</th><th>Est. Mínimo</th><th>Fornecedores</th><th>Ações</th></tr></thead>
           <tbody id="prod-tbody"></tbody></table>
         </div>
       </div>
@@ -341,15 +353,17 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';    // Cha
       <div class="panel">
         <div class="panel-hdr"><span class="panel-ttl">🔔 Itens Abaixo do Estoque Mínimo</span></div>
         <div class="tbl-wrap">
-          <table><thead><tr><th>Produto</th><th>Categoria</th><th>Qtd Atual</th><th>Est. Mínimo</th><th>Déficit</th><th>Fornecedor Principal</th><th>Telefone</th></tr></thead>
-          <tbody id="alert-tbody"><tr><td colspan="7"><div class="empty"><div class="ei">✅</div><h3>Tudo em dia!</h3><p>Nenhum item abaixo do mínimo.</p></div></td></tr></tbody></table>
+          <table><thead><tr><th>Produto</th><th>Categoria</th><th>Qtd Atual</th><th>Mínimo</th><th>Déficit</th><th>Custo Reposição Est.</th><th>Fornecedor</th><th>Telefone</th></tr></thead>
+          <tbody id="alert-tbody"></tbody></table>
         </div>
       </div>
     </section>
   </div>
 </main>
 
-<!-- ── MODAIS ──────────────────────────────────────────────── -->
+<!-- ══════════════════════════════════════════════════════════
+     MODAIS
+════════════════════════════════════════════════════════════ -->
 
 <!-- PERÍODO -->
 <div class="mo" id="m-period">
@@ -378,7 +392,10 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';    // Cha
 <!-- CONTAGEM -->
 <div class="mo" id="m-count">
   <div class="modal modal-xl">
-    <div class="modal-hdr"><div><h3>Nova Contagem de Estoque</h3><div class="msub">Preencha as quantidades de cada item</div></div><button class="modal-x" onclick="closeM('m-count')">×</button></div>
+    <div class="modal-hdr">
+      <div><h3>Nova Contagem de Estoque</h3><div class="msub">Informe as quantidades na <strong>unidade de estoque</strong> de cada item</div></div>
+      <button class="modal-x" onclick="closeM('m-count')">×</button>
+    </div>
     <div class="modal-body">
       <div class="fr3" style="margin-bottom:14px">
         <div class="fg" style="margin:0"><label>Período *</label><select id="cnt-period" onchange="onCountPeriodChange()"><option value="">— Selecione —</option></select></div>
@@ -395,7 +412,18 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';    // Cha
       </div>
       <div class="cnt-scroll">
         <table>
-          <thead><tr><th>Produto</th><th>Cat.</th><th>Un.</th><th>Custo</th><th style="text-align:center">Fechado</th><th style="text-align:center">Aberto</th><th style="text-align:center">Total</th><th style="text-align:right">Valor</th></tr></thead>
+          <thead>
+            <tr>
+              <th>Produto <span style="font-weight:400;color:var(--muted);text-transform:none">(conversão)</span></th>
+              <th>Cat.</th>
+              <th>Unid. Estoque</th>
+              <th>Custo/Unid.</th>
+              <th style="text-align:center">Fechado</th>
+              <th style="text-align:center">Aberto</th>
+              <th style="text-align:center">Total</th>
+              <th style="text-align:right">Valor</th>
+            </tr>
+          </thead>
           <tbody id="cnt-tbody"></tbody>
           <tfoot><tr style="background:#F8FAFC;border-top:2px solid var(--border)">
             <td colspan="6" style="padding:10px 14px;font-weight:600">Total Geral</td>
@@ -419,11 +447,27 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';    // Cha
         <div class="fg"><label>Período *</label><select id="pu-period"><option value="">— Selecione —</option></select></div>
       </div>
       <div class="fg"><label>Produto *</label><select id="pu-product" onchange="onPurchaseProduct()"><option value="">— Selecione —</option></select></div>
+
+      <!-- Bloco de contexto UOM — aparece ao selecionar produto com conversão -->
+      <div class="conv-info-box" id="pu-uom-box">
+        <div id="pu-uom-text"></div>
+      </div>
+
       <div class="fg"><label>Fornecedor</label><select id="pu-supplier"><option value="">— Selecione —</option></select></div>
       <div class="fr">
-        <div class="fg"><label>Quantidade *</label><input type="number" id="pu-qty" min="1" value="1" oninput="calcPuTotal()"></div>
-        <div class="fg"><label>Custo Unitário (R$) *</label><input type="number" id="pu-cost" min="0" step="0.01" value="0" oninput="calcPuTotal()"></div>
+        <div class="fg"><label id="pu-qty-lbl">Quantidade *</label><input type="number" id="pu-qty" min="1" value="1" oninput="calcPuTotal()"></div>
+        <div class="fg"><label id="pu-cost-lbl">Custo Unitário (R$) *</label><input type="number" id="pu-cost" min="0" step="0.01" value="0" oninput="calcPuTotal()"></div>
       </div>
+
+      <!-- Custo por unidade de estoque derivado — aparece quando há conversão -->
+      <div id="pu-derived-row" style="display:none;margin-bottom:14px">
+        <div class="cost-derived">
+          <span class="cd-lbl" id="pu-derived-lbl">Custo por unidade de estoque:</span>
+          <span class="cd-val" id="pu-derived-val">—</span>
+        </div>
+        <div class="conv-hint" id="pu-derived-hint"></div>
+      </div>
+
       <div class="fg"><label>Total da Compra</label><input type="text" id="pu-total" readonly style="font-weight:700;color:var(--primary)"></div>
     </div>
     <div class="modal-foot"><button class="btn btn-outline" onclick="closeM('m-purchase')">Cancelar</button><button class="btn btn-primary" onclick="savePurchase()">Registrar</button></div>
@@ -432,18 +476,68 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';    // Cha
 
 <!-- PRODUTO -->
 <div class="mo" id="m-product">
-  <div class="modal">
+  <div class="modal" style="max-width:620px">
     <div class="modal-hdr"><h3 id="prod-m-title">Novo Produto</h3><button class="modal-x" onclick="closeM('m-product')">×</button></div>
     <div class="modal-body">
       <input type="hidden" id="prod-m-id">
       <div class="fg"><label>Nome *</label><input type="text" id="prod-m-name"></div>
-      <div class="fr">
-        <div class="fg"><label>Categoria *</label><select id="prod-m-cat"><option value="">Selecione...</option><option>Diversas</option><option>Bioquímicos</option><option>Teste Rápido</option><option>Reagentes</option></select></div>
-        <div class="fg"><label>Unidade *</label><select id="prod-m-unit"><option>Unidade</option><option>Caixa</option><option>Litro</option><option>Pacote</option><option>Pacotes</option></select></div>
+      <div class="fg"><label>Categoria *</label>
+        <select id="prod-m-cat"><option value="">Selecione...</option><option>Diversas</option><option>Bioquímicos</option><option>Teste Rápido</option><option>Reagentes</option></select>
       </div>
+
+      <!-- BLOCO UOM -->
+      <div class="uom-section-divider">
+        <div class="uom-section-label">⚖️ Unidades e Conversão</div>
+        <div class="fr3">
+          <div class="fg" style="margin:0">
+            <label>Unidade de Compra *</label>
+            <select id="prod-m-pu" onchange="calcProdStockCost()">
+              <option>Unidade</option><option>Kit</option><option>Caixa</option>
+              <option>Saco</option><option>Frasco</option><option>Litro</option>
+              <option>Pacote</option><option>Embalagem</option><option>Rolo</option>
+            </select>
+            <div class="conv-hint">Como você compra</div>
+          </div>
+          <div class="fg" style="margin:0">
+            <label>Unidade de Estoque *</label>
+            <select id="prod-m-su" onchange="calcProdStockCost()">
+              <option>Unidade</option><option>Dia</option><option>Teste</option>
+              <option>mL</option><option>Lâmina</option><option>Tubo</option>
+              <option>Tira</option><option>Par</option><option>Pacote</option>
+            </select>
+            <div class="conv-hint">Como você conta e consome</div>
+          </div>
+          <div class="fg" style="margin:0">
+            <label>Fator de Conversão *</label>
+            <input type="number" id="prod-m-conv" value="1" min="1" step="1" oninput="calcProdStockCost()">
+            <div class="conv-hint" id="prod-conv-hint">1 Unidade = 1 Unidade</div>
+          </div>
+        </div>
+
+        <!-- Exemplo de conversão ativo -->
+        <div class="conv-info-box" id="prod-conv-box" style="margin-top:10px;margin-bottom:0">
+          <span id="prod-conv-example"></span>
+        </div>
+      </div>
+      <!-- FIM BLOCO UOM -->
+
+      <div class="divider"></div>
+      <div class="uom-section-label">💰 Custo</div>
       <div class="fr">
-        <div class="fg"><label>Est. Mínimo</label><input type="number" id="prod-m-min" value="1" min="0"></div>
-        <div class="fg"><label>Custo Unit. (R$)</label><input type="number" id="prod-m-cost" value="0" min="0" step="0.01"></div>
+        <div class="fg">
+          <label id="prod-pcost-lbl">Custo por Unid. de Compra (R$) *</label>
+          <input type="number" id="prod-m-pcost" value="0" min="0" step="0.01" oninput="calcProdStockCost()">
+        </div>
+        <div class="fg">
+          <label id="prod-scost-lbl">Custo por Unid. de Estoque (auto)</label>
+          <input type="text" id="prod-m-cost" readonly placeholder="Calculado automaticamente">
+          <div class="conv-hint">= Custo Compra ÷ Fator</div>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+      <div class="fr">
+        <div class="fg"><label>Est. Mínimo (em Unid. de Estoque)</label><input type="number" id="prod-m-min" value="1" min="0"></div>
       </div>
       <div class="fg"><label>Fornecedores (Ctrl+clique = múltiplos)</label><select id="prod-m-supps" multiple></select></div>
     </div>
@@ -467,22 +561,56 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';    // Cha
   </div>
 </div>
 
-<!-- ── JAVASCRIPT ──────────────────────────────────────────── -->
+<!-- EDIÇÃO RÁPIDA UOM -->
+<div class="mo" id="m-quickedit">
+  <div class="modal modal-xl">
+    <div class="modal-hdr">
+      <div>
+        <h3>⚡ Edição Rápida — Unidades e Conversão</h3>
+        <div class="msub">Preencha unidade de compra, unidade de estoque e fator. O custo por unidade de estoque é calculado automaticamente.</div>
+      </div>
+      <button class="modal-x" onclick="closeM('m-quickedit')">×</button>
+    </div>
+    <div class="modal-body" style="padding:0">
+      <div class="qe-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th style="min-width:200px">Produto</th>
+              <th style="min-width:115px">Unid. de Compra</th>
+              <th style="min-width:115px">Unid. de Estoque</th>
+              <th style="min-width:75px">Fator</th>
+              <th style="min-width:130px">Custo / Unid. Compra (R$)</th>
+              <th style="min-width:150px">Custo / Unid. Estoque ✓</th>
+            </tr>
+          </thead>
+          <tbody id="qe-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="modal-foot" style="align-items:center">
+      <div class="qe-warn" style="flex:1">⚠️ Ao salvar, todos os custos de estoque são recalculados com base nos valores preenchidos acima. Confira a coluna verde antes de confirmar.</div>
+      <div style="display:flex;gap:8px;flex-shrink:0;margin-left:16px">
+        <button class="btn btn-outline" onclick="closeM('m-quickedit')">Cancelar</button>
+        <button class="btn btn-primary" onclick="saveQuickEdit()">💾 Salvar Todos</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     JAVASCRIPT
+════════════════════════════════════════════════════════════ -->
 <script>
-// ─── SUPABASE CLIENT ──────────────────────────────────────────
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // ─── STATE ────────────────────────────────────────────────────
 let S = { products:[], suppliers:[], periods:[], counts:[], purchases:[] };
 let prodCatFilter = '';
-let _loading = false;
 
 // ─── LOADING & TOAST ──────────────────────────────────────────
-function setLoading(v) {
-  _loading = v;
-  document.getElementById('loader').style.display = v ? 'flex' : 'none';
-}
-function toast(msg, type='ok') {
+function setLoading(v){ document.getElementById('loader').style.display = v ? 'flex' : 'none'; }
+function toast(msg, type='ok'){
   const el = document.createElement('div');
   el.className = 'toast-item toast-' + type;
   el.textContent = msg;
@@ -491,7 +619,7 @@ function toast(msg, type='ok') {
 }
 
 // ─── DATA LOADING ─────────────────────────────────────────────
-async function loadAll() {
+async function loadAll(){
   setLoading(true);
   try {
     await Promise.all([loadSuppliers(), loadProducts(), loadPeriods(), loadCounts(), loadPurchases()]);
@@ -499,50 +627,74 @@ async function loadAll() {
   } catch(e) {
     console.error(e);
     toast('Erro ao carregar dados: ' + e.message, 'err');
-  } finally {
-    setLoading(false);
-  }
+  } finally { setLoading(false); }
 }
 
-async function loadSuppliers() {
+async function loadSuppliers(){
   const {data,error} = await sb.from('suppliers').select('*').order('name');
   if(error) throw error;
   S.suppliers = data;
 }
 
-async function loadProducts() {
+async function loadProducts(){
   const [{data:prods,error:e1},{data:ps,error:e2}] = await Promise.all([
     sb.from('products').select('*').eq('active',true).order('name'),
     sb.from('product_suppliers').select('*')
   ]);
   if(e1) throw e1; if(e2) throw e2;
-  S.products = prods.map(p=>({...p, cat:p.cat, min:p.min_stock, cost:p.unit_cost,
-    supps: ps.filter(x=>x.product_id===p.id).map(x=>x.supplier_id)}));
+
+  S.products = prods.map(p => {
+    const convFactor = parseFloat(p.conversion_factor) || 1;
+    // purchaseCost: se existe no DB usa, senão reconstrói (unit_cost × fator)
+    const purchaseCost = parseFloat(p.purchase_unit_cost) > 0
+      ? parseFloat(p.purchase_unit_cost)
+      : parseFloat(p.unit_cost) * convFactor;
+    return {
+      ...p,
+      cat: p.cat,
+      min: p.min_stock,
+      cost: parseFloat(p.unit_cost) || 0,         // custo por UNIDADE DE ESTOQUE
+      purchaseUnit: p.purchase_unit || 'Unidade',
+      stockUnit: p.unit || 'Unidade',              // 'unit' no DB = unidade de estoque
+      convFactor,
+      purchaseCost,
+      supps: ps.filter(x => x.product_id === p.id).map(x => x.supplier_id)
+    };
+  });
 }
 
-async function loadPeriods() {
+async function loadPeriods(){
   const {data,error} = await sb.from('periods').select('*').order('created_at',{ascending:false});
   if(error) throw error;
-  S.periods = data.map(p=>({...p, start:p.start_date, end:p.end_date, typeLabel:p.type_label,
-    openCountId:p.open_count_id, closeCountId:p.close_count_id}));
+  S.periods = data.map(p => ({
+    ...p, start:p.start_date, end:p.end_date, typeLabel:p.type_label,
+    openCountId:p.open_count_id, closeCountId:p.close_count_id
+  }));
 }
 
-async function loadCounts() {
+async function loadCounts(){
   const {data,error} = await sb.from('stock_counts')
     .select('*, count_items(*)').order('date',{ascending:false});
   if(error) throw error;
-  S.counts = data.map(c=>({...c, periodId:c.period_id,
-    items:(c.count_items||[]).map(i=>({pid:i.product_id,f:i.qty_closed,a:i.qty_open,total:i.total,snap:i.cost_snapshot}))}));
+  S.counts = data.map(c => ({
+    ...c, periodId:c.period_id,
+    items:(c.count_items||[]).map(i=>({
+      pid:i.product_id, f:i.qty_closed, a:i.qty_open,
+      total:i.total, snap:i.cost_snapshot
+    }))
+  }));
 }
 
-async function loadPurchases() {
+async function loadPurchases(){
   const {data,error} = await sb.from('purchases').select('*').order('date',{ascending:false});
   if(error) throw error;
-  S.purchases = data.map(p=>({...p, periodId:p.period_id, prodId:p.product_id, suppId:p.supplier_id}));
+  S.purchases = data.map(p => ({
+    ...p, periodId:p.period_id, prodId:p.product_id, suppId:p.supplier_id
+  }));
 }
 
-// ─── REAL-TIME SUBSCRIPTION ───────────────────────────────────
-function startRealtime() {
+// ─── REAL-TIME ────────────────────────────────────────────────
+function startRealtime(){
   sb.channel('petlab-sync')
     .on('postgres_changes', {event:'*', schema:'public'}, () => {
       loadAll().then(() => toast('Dados atualizados', 'ok'));
@@ -553,28 +705,30 @@ function startRealtime() {
     });
 }
 
-// ─── RENDER ALL ───────────────────────────────────────────────
-function renderAll() {
+function renderAll(){
   renderProducts(); renderSuppliers(); renderPeriods();
   renderCounts(); renderPurchases(); renderDashboard(); updateAlertBadge();
 }
 
 // ─── NAVIGATION ───────────────────────────────────────────────
-const PT = {dashboard:'Dashboard',periodos:'Períodos',contagem:'Contagem de Estoque',
+const PT = {
+  dashboard:'Dashboard',periodos:'Períodos',contagem:'Contagem de Estoque',
   compras:'Compras',cmv:'CMV — Custo das Mercadorias Vendidas',
-  produtos:'Produtos',fornecedores:'Fornecedores',alertas:'Alertas de Estoque'};
-
-function go(page) {
+  produtos:'Produtos',fornecedores:'Fornecedores',alertas:'Alertas de Estoque'
+};
+function go(page){
   document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   document.getElementById('section-'+page).classList.add('active');
   document.getElementById('nav-'+page)?.classList.add('active');
   document.getElementById('page-title').textContent = PT[page]||page;
-  const acts={periodos:'<button class="btn btn-primary" onclick="openPeriodModal()">+ Novo Período</button>',
+  const acts = {
+    periodos:'<button class="btn btn-primary" onclick="openPeriodModal()">+ Novo Período</button>',
     contagem:'<button class="btn btn-primary" onclick="openCountModal()">+ Nova Contagem</button>',
     compras:'<button class="btn btn-primary" onclick="openPurchaseModal()">+ Registrar Compra</button>',
     produtos:'<button class="btn btn-primary" onclick="openProductModal()">+ Novo Produto</button>',
-    fornecedores:'<button class="btn btn-primary" onclick="openSupplierModal()">+ Novo Fornecedor</button>'};
+    fornecedores:'<button class="btn btn-primary" onclick="openSupplierModal()">+ Novo Fornecedor</button>'
+  };
   document.getElementById('page-actions').innerHTML = acts[page]||'';
   if(page==='cmv') refreshCMVSelect();
   if(page==='alertas') renderAlerts();
@@ -582,7 +736,7 @@ function go(page) {
 }
 
 // ─── DASHBOARD ────────────────────────────────────────────────
-function renderDashboard() {
+function renderDashboard(){
   const last = S.counts.length ? S.counts[0] : null;
   document.getElementById('d-estoque').textContent = last ? R(countVal(last)) : '—';
   document.getElementById('d-estoque-sub').textContent = last ? 'Contagem em '+fmtDate(last.date) : 'Nenhuma contagem';
@@ -592,25 +746,35 @@ function renderDashboard() {
     document.getElementById('d-cmv').textContent = cmv!==null?R(cmv):'—';
     document.getElementById('d-cmv-sub').textContent = 'Período: '+lp.label;
   }
-  const active=S.periods.find(p=>p.status==='aberto');
+  const active = S.periods.find(p=>p.status==='aberto');
   if(active){
     document.getElementById('d-period').textContent=active.label;
     document.getElementById('d-period-sub').textContent=active.typeLabel+' · '+fmtDate(active.start)+(active.end?' – '+fmtDate(active.end):'');
-  } else {
+  }else{
     document.getElementById('d-period').textContent='Nenhum';
     document.getElementById('d-period-sub').textContent='Crie um período para começar';
   }
-  const alerts=getLowAlerts();
+  const alerts = getLowAlerts();
   document.getElementById('d-alerts').textContent=alerts.length;
   document.getElementById('d-alerts').closest('.stat-card').className='stat-card '+(alerts.length>0?'c-danger':'c-ok');
   const atb=document.getElementById('d-alerts-tbody');
   atb.innerHTML=alerts.length===0
     ? '<tr><td colspan="4"><div class="empty" style="padding:16px"><div class="ei">✅</div><p>Nenhum alerta</p></div></td></tr>'
-    : alerts.slice(0,8).map(a=>`<tr><td><strong>${a.p.name}</strong></td><td class="text-danger fw6">${a.qty}</td><td>${a.p.min}</td><td>${a.sName}</td></tr>`).join('');
+    : alerts.slice(0,8).map(a=>`<tr>
+        <td><strong>${a.p.name}</strong></td>
+        <td class="text-danger fw6">${a.qty} <span style="font-size:11px">${a.p.stockUnit}</span></td>
+        <td>${a.p.min} ${a.p.stockUnit}</td>
+        <td>${a.sName}</td>
+      </tr>`).join('');
   const pdiv=document.getElementById('d-periods');
   pdiv.innerHTML=S.periods.length===0
     ? '<div class="empty" style="padding:16px"><div class="ei">📅</div><p>Nenhum período criado</p></div>'
-    : S.periods.slice(0,5).map(p=>`<div class="pi"><div class="pi-dot ${p.status}"></div><div style="flex:1"><div class="fw6" style="font-size:13px">${p.label}</div><div style="font-size:11.5px;color:var(--muted)">${p.typeLabel} · ${fmtDate(p.start)}${p.end?' – '+fmtDate(p.end):''}</div></div><span class="badge ${p.status==='aberto'?'b-ok':'b-gray'}">${p.status==='aberto'?'Ativo':'Fechado'}</span></div>`).join('');
+    : S.periods.slice(0,5).map(p=>`<div class="pi">
+        <div class="pi-dot ${p.status}"></div>
+        <div style="flex:1"><div class="fw6" style="font-size:13px">${p.label}</div>
+        <div style="font-size:11.5px;color:var(--muted)">${p.typeLabel} · ${fmtDate(p.start)}${p.end?' – '+fmtDate(p.end):''}</div></div>
+        <span class="badge ${p.status==='aberto'?'b-ok':'b-gray'}">${p.status==='aberto'?'Ativo':'Fechado'}</span>
+      </div>`).join('');
   updateAlertBadge();
 }
 
@@ -636,7 +800,7 @@ async function savePeriod(){
   let label;
   if(type==='implantacao') label='Implantação — '+fmtDate(start);
   else if(type==='semanal') label='Semana '+fmtDate(start)+' – '+fmtDate(end);
-  else {const d=new Date(start+'T12:00:00');label=d.toLocaleString('pt-BR',{month:'long',year:'numeric'});label=label.charAt(0).toUpperCase()+label.slice(1);}
+  else { const d=new Date(start+'T12:00:00'); label=d.toLocaleString('pt-BR',{month:'long',year:'numeric'}); label=label.charAt(0).toUpperCase()+label.slice(1); }
   setLoading(true);
   const {error}=await sb.from('periods').insert({type,type_label:lblMap[type],label,start_date:start,end_date:type==='implantacao'?null:end,status:'aberto'});
   if(error){setLoading(false);alert('Erro: '+error.message);return;}
@@ -644,11 +808,10 @@ async function savePeriod(){
   await loadAll(); setLoading(false);
 }
 async function closePeriod(id){
-  const p=S.periods.find(x=>x.id===id);
-  if(!p) return;
+  const p=S.periods.find(x=>x.id===id); if(!p) return;
   if(!p.openCountId){alert('Período sem contagem de abertura.');return;}
   if(p.type!=='implantacao'&&!p.closeCountId){alert('Período sem contagem de fechamento.');return;}
-  if(!confirm(`Fechar o período "${p.label}"? Esta ação é definitiva.`)) return;
+  if(!confirm(`Fechar "${p.label}"? Ação definitiva.`)) return;
   setLoading(true);
   await sb.from('periods').update({status:'fechado'}).eq('id',id);
   toast('Período fechado!'); await loadAll(); setLoading(false);
@@ -661,7 +824,7 @@ async function deletePeriod(id){
 }
 function renderPeriods(){
   const tb=document.getElementById('periodos-tbody');
-  if(!S.periods.length){tb.innerHTML='<tr><td colspan="9"><div class="empty"><div class="ei">📅</div><h3>Nenhum período</h3><p>Crie um período para começar.</p></div></td></tr>';return;}
+  if(!S.periods.length){tb.innerHTML='<tr><td colspan="9"><div class="empty"><div class="ei">📅</div><h3>Nenhum período</h3></div></td></tr>';return;}
   tb.innerHTML=S.periods.map(p=>{
     const oc=p.openCountId?S.counts.find(c=>c.id===p.openCountId):null;
     const cc=p.closeCountId?S.counts.find(c=>c.id===p.closeCountId):null;
@@ -680,7 +843,8 @@ function renderPeriods(){
       <td>${oc?`<span class="badge b-ok">✓ ${fmtDate(oc.date)}</span>`:'<span class="badge b-warn">Pendente</span>'}</td>
       <td>${p.type==='implantacao'?'<span class="badge b-gray">N/A</span>':cc?`<span class="badge b-ok">✓ ${fmtDate(cc.date)}</span>`:'<span class="badge b-warn">Pendente</span>'}</td>
       <td class="mono fw7">${cmv!==null?R(cmv):'—'}</td>
-      <td>${acts}</td></tr>`;
+      <td>${acts}</td>
+    </tr>`;
   }).join('');
 }
 
@@ -695,22 +859,35 @@ function onCountPeriodChange(){
   const pid=parseInt(document.getElementById('cnt-period').value);
   const p=S.periods.find(x=>x.id===pid); if(!p) return;
   const ts=document.getElementById('cnt-type');
-  if(p.type==='implantacao'){ts.innerHTML='<option value="abertura">Implantação (Estoque Inicial)</option>';}
-  else{const h=!!p.openCountId;ts.innerHTML=`<option value="abertura"${h?' disabled':''}>Abertura${h?' (✓ feita)':''}</option><option value="fechamento"${!h?' disabled':''}>Fechamento${!h?' (aguarda abertura)':''}</option>`;ts.value=h?'fechamento':'abertura';}
+  if(p.type==='implantacao'){
+    ts.innerHTML='<option value="abertura">Implantação (Estoque Inicial)</option>';
+  } else {
+    const h=!!p.openCountId;
+    ts.innerHTML=`<option value="abertura"${h?' disabled':''}>Abertura${h?' (✓ feita)':''}</option><option value="fechamento"${!h?' disabled':''}>Fechamento${!h?' (aguarda abertura)':''}</option>`;
+    ts.value=h?'fechamento':'abertura';
+  }
 }
 function buildCountTable(){
   const ccol={Diversas:'b-gray',Bioquímicos:'b-primary','Teste Rápido':'b-ok',Reagentes:'b-warn'};
-  document.getElementById('cnt-tbody').innerHTML=S.products.filter(p=>p.active).map(p=>`
-    <tr data-cat="${p.cat}">
-      <td><strong>${p.name}</strong></td>
+  document.getElementById('cnt-tbody').innerHTML=S.products.filter(p=>p.active).map(p=>{
+    // Mostra dica de conversão quando fator > 1
+    const convInfo = p.convFactor > 1
+      ? `<div style="font-size:10px;margin-top:2px;"><span class="uom-pill">1 ${p.purchaseUnit} = ${p.convFactor} ${p.stockUnit}</span></div>`
+      : '';
+    return `<tr data-cat="${p.cat}">
+      <td>
+        <strong>${p.name}</strong>
+        ${convInfo}
+      </td>
       <td><span class="badge ${ccol[p.cat]||'b-gray'}" style="font-size:10px">${p.cat}</span></td>
-      <td style="color:var(--muted)">${p.unit}</td>
-      <td class="mono" style="color:var(--muted)">${p.cost>0?R(p.cost):'—'}</td>
+      <td><span class="uom-pill">${p.stockUnit}</span></td>
+      <td class="mono" style="color:var(--muted);font-size:12px">${p.cost>0?R(p.cost)+'<span style="color:var(--muted);font-weight:400">/' + p.stockUnit + '</span>':'—'}</td>
       <td style="text-align:center"><input type="number" class="cnt-input" id="cf-${p.id}" min="0" value="0" oninput="updRow(${p.id})"></td>
       <td style="text-align:center"><input type="number" class="cnt-input" id="ca-${p.id}" min="0" value="0" oninput="updRow(${p.id})"></td>
       <td style="text-align:center;font-weight:700" id="ct-${p.id}">0</td>
       <td style="text-align:right;font-family:'DM Mono',monospace" id="cv-${p.id}">${R(0)}</td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
   updTotals();
 }
 function filterCntTable(cat,btn){
@@ -722,12 +899,17 @@ function updRow(pid){
   const a=parseInt(document.getElementById('ca-'+pid)?.value)||0;
   const p=S.products.find(x=>x.id===pid);
   document.getElementById('ct-'+pid).textContent=f+a;
+  // Usa unit_cost (custo por UNIDADE DE ESTOQUE) — agora sempre correto
   document.getElementById('cv-'+pid).textContent=R((f+a)*(p?p.cost:0));
   updTotals();
 }
 function updTotals(){
   let q=0,v=0;
-  S.products.filter(p=>p.active).forEach(p=>{const f=parseInt(document.getElementById('cf-'+p.id)?.value)||0,a=parseInt(document.getElementById('ca-'+p.id)?.value)||0;q+=f+a;v+=(f+a)*p.cost;});
+  S.products.filter(p=>p.active).forEach(p=>{
+    const f=parseInt(document.getElementById('cf-'+p.id)?.value)||0;
+    const a=parseInt(document.getElementById('ca-'+p.id)?.value)||0;
+    q+=f+a; v+=(f+a)*p.cost;  // p.cost = custo por unidade de estoque
+  });
   document.getElementById('cnt-tot-qty').textContent=q;
   document.getElementById('cnt-tot-val').textContent=R(v);
 }
@@ -750,9 +932,8 @@ async function saveCount(){
     if(e2) throw e2;
     const field=(type==='fechamento')?'close_count_id':'open_count_id';
     await sb.from('periods').update({[field]:cnt.id}).eq('id',periodId);
-    closeM('m-count'); toast('Contagem salva!');
-    await loadAll();
-  }catch(e){alert('Erro: '+e.message);}
+    closeM('m-count'); toast('Contagem salva!'); await loadAll();
+  } catch(e){alert('Erro: '+e.message);}
   finally{setLoading(false);}
 }
 async function deleteCount(id){
@@ -771,15 +952,17 @@ async function deleteCount(id){
 }
 function renderCounts(){
   const tb=document.getElementById('contagem-tbody');
-  if(!S.counts.length){tb.innerHTML='<tr><td colspan="6"><div class="empty"><div class="ei">📋</div><h3>Nenhuma contagem</h3><p>Faça a primeira contagem.</p></div></td></tr>';return;}
+  if(!S.counts.length){tb.innerHTML='<tr><td colspan="6"><div class="empty"><div class="ei">📋</div><h3>Nenhuma contagem</h3></div></td></tr>';return;}
   const lbls={abertura:'Abertura',fechamento:'Fechamento',implantacao:'Implantação'};
   tb.innerHTML=S.counts.map(c=>{
     const p=S.periods.find(x=>x.id===c.periodId);
-    return `<tr><td>${fmtDate(c.date)}</td><td>${p?p.label:'—'}</td>
-    <td><span class="badge ${c.type==='fechamento'?'b-ok':'b-primary'}">${lbls[c.type]||c.type}</span></td>
-    <td>${c.items.filter(i=>i.total>0).length} itens</td>
-    <td class="mono fw6 text-primary">${R(countVal(c))}</td>
-    <td><button class="btn btn-sm btn-outline" style="color:var(--danger)" onclick="deleteCount(${c.id})">✕ Excluir</button></td></tr>`;
+    return `<tr>
+      <td>${fmtDate(c.date)}</td><td>${p?p.label:'—'}</td>
+      <td><span class="badge ${c.type==='fechamento'?'b-ok':'b-primary'}">${lbls[c.type]||c.type}</span></td>
+      <td>${c.items.filter(i=>i.total>0).length} itens</td>
+      <td class="mono fw6 text-primary">${R(countVal(c))}</td>
+      <td><button class="btn btn-sm btn-outline" style="color:var(--danger)" onclick="deleteCount(${c.id})">✕ Excluir</button></td>
+    </tr>`;
   }).join('');
 }
 
@@ -788,68 +971,160 @@ function openPurchaseModal(){
   document.getElementById('pu-date').value=today();
   const ps=S.periods.filter(p=>p.status==='aberto');
   document.getElementById('pu-period').innerHTML='<option value="">— Selecione —</option>'+ps.map(p=>`<option value="${p.id}">${p.label}</option>`).join('');
-  document.getElementById('pu-product').innerHTML='<option value="">— Selecione —</option>'+S.products.filter(p=>p.active).sort((a,b)=>a.name.localeCompare(b.name)).map(p=>`<option value="${p.id}">${p.name} (${p.cat})</option>`).join('');
+  document.getElementById('pu-product').innerHTML='<option value="">— Selecione —</option>'+
+    S.products.filter(p=>p.active).sort((a,b)=>a.name.localeCompare(b.name))
+    .map(p=>`<option value="${p.id}">${p.name} (${p.cat})</option>`).join('');
   document.getElementById('pu-supplier').innerHTML='<option value="">— Selecione —</option>'+S.suppliers.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
-  document.getElementById('pu-qty').value=1; document.getElementById('pu-cost').value=0; document.getElementById('pu-total').value='R$ 0,00';
+  // Reseta UI
+  document.getElementById('pu-qty-lbl').textContent='Quantidade *';
+  document.getElementById('pu-cost-lbl').textContent='Custo Unitário (R$) *';
+  document.getElementById('pu-uom-box').style.display='none';
+  document.getElementById('pu-derived-row').style.display='none';
+  document.getElementById('pu-qty').value=1;
+  document.getElementById('pu-cost').value=0;
+  document.getElementById('pu-total').value='R$ 0,00';
   openM('m-purchase');
 }
+
 function onPurchaseProduct(){
   const pid=parseInt(document.getElementById('pu-product').value);
   const p=S.products.find(x=>x.id===pid);
-  if(p){document.getElementById('pu-cost').value=p.cost;if(p.supps.length)document.getElementById('pu-supplier').value=p.supps[0];calcPuTotal();}
+  if(!p) return;
+
+  // Atualiza labels com unidade de compra
+  document.getElementById('pu-qty-lbl').textContent=`Quantidade (em ${p.purchaseUnit}) *`;
+  document.getElementById('pu-cost-lbl').textContent=`Custo por ${p.purchaseUnit} (R$) *`;
+
+  // Pré-preenche com último custo de compra conhecido
+  document.getElementById('pu-cost').value = p.purchaseCost || 0;
+
+  // Mostra contexto de conversão se fator > 1
+  const uomBox = document.getElementById('pu-uom-box');
+  const derivedRow = document.getElementById('pu-derived-row');
+  if(p.convFactor > 1){
+    uomBox.style.display = 'block';
+    document.getElementById('pu-uom-text').innerHTML =
+      `📦 <strong>Conversão ativa:</strong> 1 <strong>${p.purchaseUnit}</strong> = <strong>${p.convFactor} ${p.stockUnit}</strong> no estoque. ` +
+      `O custo por ${p.stockUnit} será calculado automaticamente.`;
+    derivedRow.style.display = 'block';
+    document.getElementById('pu-derived-lbl').textContent = `Custo por ${p.stockUnit} (calculado):`;
+  } else {
+    uomBox.style.display = 'none';
+    derivedRow.style.display = 'none';
+  }
+
+  // Fornecedor padrão
+  if(p.supps.length) document.getElementById('pu-supplier').value=p.supps[0];
+  calcPuTotal();
 }
+
 function calcPuTotal(){
+  const pid=parseInt(document.getElementById('pu-product').value);
+  const p=S.products.find(x=>x.id===pid);
   const q=parseFloat(document.getElementById('pu-qty').value)||0;
   const c=parseFloat(document.getElementById('pu-cost').value)||0;
   document.getElementById('pu-total').value=R(q*c);
+
+  // Atualiza custo por unidade de estoque derivado
+  if(p && p.convFactor > 1){
+    const stockCost = p.convFactor > 0 ? c / p.convFactor : 0;
+    document.getElementById('pu-derived-val').textContent = R(stockCost) + ' / ' + p.stockUnit;
+    document.getElementById('pu-derived-hint').textContent =
+      `${R(c)} ÷ ${p.convFactor} ${p.stockUnit} = ${R(stockCost)} por ${p.stockUnit}`;
+  }
 }
+
 async function savePurchase(){
   const periodId=parseInt(document.getElementById('pu-period').value);
   const prodId=parseInt(document.getElementById('pu-product').value);
   const suppId=parseInt(document.getElementById('pu-supplier').value)||null;
   const date=document.getElementById('pu-date').value;
   const qty=parseFloat(document.getElementById('pu-qty').value)||0;
-  const cost=parseFloat(document.getElementById('pu-cost').value)||0;
+  const cost=parseFloat(document.getElementById('pu-cost').value)||0; // custo por UNIDADE DE COMPRA
+
   if(!periodId||isNaN(periodId)){alert('Selecione um período.');return;}
   if(!prodId||isNaN(prodId)){alert('Selecione um produto.');return;}
   if(!date){alert('Informe a data.');return;}
   if(qty<=0){alert('Quantidade deve ser maior que zero.');return;}
+
+  const prod = S.products.find(x=>x.id===prodId);
+  const convFactor = prod ? prod.convFactor : 1;
+  // CÁLCULO CORRETO: custo por unidade de estoque = custo_compra / fator
+  const stockUnitCost = cost > 0 ? cost / convFactor : 0;
+
   setLoading(true);
-  const {error}=await sb.from('purchases').insert({period_id:periodId,product_id:prodId,supplier_id:suppId,date,qty,cost,total:qty*cost});
-  if(!error&&cost>0) await sb.from('products').update({unit_cost:cost}).eq('id',prodId);
+  // Armazena qty em unidades de COMPRA; total = dinheiro gasto (correto para CMV)
+  const {error}=await sb.from('purchases').insert({
+    period_id:periodId, product_id:prodId, supplier_id:suppId,
+    date, qty, cost, total: qty * cost
+  });
+
+  if(!error && cost > 0){
+    // Atualiza produto com novo custo calculado por unidade de ESTOQUE
+    await sb.from('products').update({
+      unit_cost: stockUnitCost,
+      purchase_unit_cost: cost
+    }).eq('id', prodId);
+  }
+
   if(error){setLoading(false);alert('Erro: '+error.message);return;}
-  closeM('m-purchase'); toast('Compra registrada!'); await loadAll(); setLoading(false);
+  closeM('m-purchase');
+  toast('Compra registrada! Custo por unidade de estoque atualizado.');
+  await loadAll(); setLoading(false);
 }
+
 async function deletePurchase(id){
   if(!confirm('Excluir esta compra?')) return;
   setLoading(true);
   await sb.from('purchases').delete().eq('id',id);
   toast('Compra excluída.'); await loadAll(); setLoading(false);
 }
+
 function renderPurchases(){
   const tb=document.getElementById('compras-tbody');
-  if(!S.purchases.length){tb.innerHTML='<tr><td colspan="8"><div class="empty"><div class="ei">🛒</div><h3>Nenhuma compra</h3><p>Registre entradas de materiais.</p></div></td></tr>';return;}
+  if(!S.purchases.length){
+    tb.innerHTML='<tr><td colspan="9"><div class="empty"><div class="ei">🛒</div><h3>Nenhuma compra</h3></div></td></tr>';return;
+  }
   tb.innerHTML=S.purchases.map(c=>{
     const prod=S.products.find(p=>p.id===c.prodId);
     const supp=S.suppliers.find(s=>s.id===c.suppId);
     const per=S.periods.find(p=>p.id===c.periodId);
-    return `<tr><td>${fmtDate(c.date)}</td><td><strong>${prod?prod.name:'—'}</strong></td>
-    <td>${supp?supp.name:'—'}</td><td>${c.qty}</td>
-    <td class="mono">${R(c.cost)}</td><td class="mono fw6 text-primary">${R(c.total)}</td>
-    <td style="font-size:12px;color:var(--muted)">${per?per.label:'—'}</td>
-    <td><button class="btn btn-sm btn-outline" style="color:var(--danger)" onclick="deletePurchase(${c.id})">✕</button></td></tr>`;
+    const convFactor = prod ? prod.convFactor : 1;
+    const purchaseUnit = prod ? prod.purchaseUnit : 'un.';
+    const stockUnit = prod ? prod.stockUnit : 'un.';
+    // Custo por unidade de estoque inferido da compra
+    const stockCostFromPurchase = cost_per_stock(c.cost, convFactor);
+    return `<tr>
+      <td>${fmtDate(c.date)}</td>
+      <td>
+        <strong>${prod?prod.name:'—'}</strong>
+        ${convFactor>1?`<div style="font-size:10px;margin-top:1px"><span class="uom-pill">1 ${purchaseUnit} = ${convFactor} ${stockUnit}</span></div>`:''}
+      </td>
+      <td>${supp?supp.name:'—'}</td>
+      <td class="mono">${c.qty} <span style="font-size:11px;color:var(--muted)">${purchaseUnit}</span></td>
+      <td class="mono">${R(c.cost)}<span style="font-size:10px;color:var(--muted)">/${purchaseUnit}</span></td>
+      <td class="mono ${convFactor>1?'text-primary':'text-muted'}">${R(stockCostFromPurchase)}<span style="font-size:10px">/${stockUnit}</span></td>
+      <td class="mono fw6 text-primary">${R(c.total)}</td>
+      <td style="font-size:12px;color:var(--muted)">${per?per.label:'—'}</td>
+      <td><button class="btn btn-sm btn-outline" style="color:var(--danger)" onclick="deletePurchase(${c.id})">✕</button></td>
+    </tr>`;
   }).join('');
 }
 
 // ─── CMV ──────────────────────────────────────────────────────
 function countVal(cnt){
-  return cnt.items.reduce((s,i)=>{const snap=i.snap!==undefined?i.snap:(S.products.find(p=>p.id===i.pid)||{cost:0}).cost;return s+i.total*snap;},0);
+  return cnt.items.reduce((s,i)=>{
+    // snap = custo por unidade de ESTOQUE (garantido pela nova lógica)
+    const snap=i.snap!==undefined?i.snap:(S.products.find(p=>p.id===i.pid)||{cost:0}).cost;
+    return s+i.total*snap;
+  },0);
 }
 function calcCMV(periodId){
   const p=S.periods.find(x=>x.id===periodId); if(!p) return null;
   const oc=p.openCountId?S.counts.find(c=>c.id===p.openCountId):null; if(!oc) return null;
   if(p.type!=='implantacao'&&!p.closeCountId) return null;
   const cc=p.closeCountId?S.counts.find(c=>c.id===p.closeCountId):null;
+  // pv = total de dinheiro gasto em compras no período (correto para CMV)
   const pv=S.purchases.filter(x=>x.periodId===periodId).reduce((s,x)=>s+x.total,0);
   return countVal(oc)+pv-(cc?countVal(cc):0);
 }
@@ -876,7 +1151,7 @@ function renderCMV(){
       <div class="cmv-box"><div class="cl">📦 Estoque Final</div><div class="cv">${cv!==null?R(cv):p.type==='implantacao'?'<span style="color:var(--muted)">N/A</span>':'<span style="color:var(--warn)">Pendente</span>'}</div><div style="font-size:11px;color:var(--muted);margin-top:4px">${cc?fmtDate(cc.date):'—'}</div></div>
       <div class="cmv-box hl"><div class="cl">= CMV</div><div class="cv">${cmv!==null?R(cmv):'—'}</div><div style="font-size:10px;color:var(--primary-d);margin-top:4px">Ini. + Compras − Final</div></div>
     </div>
-    ${purch.length>0?`<div class="panel" style="margin-top:4px"><div class="panel-hdr"><span class="panel-ttl">Compras do Período</span></div><div class="tbl-wrap"><table><thead><tr><th>Data</th><th>Produto</th><th>Fornecedor</th><th>Qtd</th><th>Custo Unit.</th><th>Total</th></tr></thead><tbody>${purch.map(c=>{const pr=S.products.find(x=>x.id===c.prodId);const su=S.suppliers.find(x=>x.id===c.suppId);return `<tr><td>${fmtDate(c.date)}</td><td>${pr?pr.name:'—'}</td><td>${su?su.name:'—'}</td><td>${c.qty}</td><td class="mono">${R(c.cost)}</td><td class="mono fw6 text-primary">${R(c.total)}</td></tr>`;}).join('')}<tr style="background:#F8FAFC"><td colspan="5" style="text-align:right;font-weight:600;padding:9px 14px">Total</td><td class="mono fw7 text-primary" style="padding:9px 14px">${R(pv)}</td></tr></tbody></table></div></div>`:''}`;
+    ${purch.length>0?`<div class="panel" style="margin-top:4px"><div class="panel-hdr"><span class="panel-ttl">Compras do Período</span></div><div class="tbl-wrap"><table><thead><tr><th>Data</th><th>Produto</th><th>Qtd</th><th>Custo/Unid. Compra</th><th>Custo/Unid. Estoque</th><th>Total</th></tr></thead><tbody>${purch.map(c=>{const pr=S.products.find(x=>x.id===c.prodId);const pu=pr?pr.purchaseUnit:'un.';const su=pr?pr.stockUnit:'un.';const cf=pr?pr.convFactor:1;const sc=cost_per_stock(c.cost,cf);return `<tr><td>${fmtDate(c.date)}</td><td>${pr?pr.name:'—'}</td><td>${c.qty} <span style="font-size:11px;color:var(--muted)">${pu}</span></td><td class="mono">${R(c.cost)}/${pu}</td><td class="mono ${cf>1?'text-primary':''}">${R(sc)}/${su}</td><td class="mono fw6 text-primary">${R(c.total)}</td></tr>`;}).join('')}<tr style="background:#F8FAFC"><td colspan="5" style="text-align:right;font-weight:600;padding:9px 14px">Total Compras</td><td class="mono fw7 text-primary" style="padding:9px 14px">${R(pv)}</td></tr></tbody></table></div></div>`:''}`;
 }
 function renderCMVHistory(){
   const tb=document.getElementById('cmv-hist');
@@ -892,7 +1167,47 @@ function renderCMVHistory(){
 }
 
 // ─── PRODUCTS ─────────────────────────────────────────────────
-function setProdCat(cat,btn){prodCatFilter=cat;document.querySelectorAll('#section-produtos .fpill').forEach(b=>b.classList.remove('active'));btn.classList.add('active');renderProducts();}
+
+// Recalcula custo por unidade de estoque no modal de produto
+function calcProdStockCost(){
+  const pu = document.getElementById('prod-m-pu').value;
+  const su = document.getElementById('prod-m-su').value;
+  const conv = parseFloat(document.getElementById('prod-m-conv').value) || 1;
+  const pcost = parseFloat(document.getElementById('prod-m-pcost').value) || 0;
+  const scost = conv > 0 ? pcost / conv : 0;
+
+  // Atualiza campo readonly de custo/unidade de estoque
+  document.getElementById('prod-m-cost').value = pcost > 0 ? R(scost) : '';
+  // Atualiza labels
+  document.getElementById('prod-pcost-lbl').textContent = `Custo por ${pu} (R$) *`;
+  document.getElementById('prod-scost-lbl').textContent = `Custo por ${su} (calculado)`;
+  // Atualiza dica de conversão
+  document.getElementById('prod-conv-hint').textContent = conv > 1
+    ? `1 ${pu} = ${conv} ${su}`
+    : `1 ${pu} = 1 ${su} (sem conversão)`;
+  // Mostra caixa de exemplo quando há conversão real
+  const convBox = document.getElementById('prod-conv-box');
+  if(conv > 1 && pcost > 0){
+    convBox.style.display = 'block';
+    document.getElementById('prod-conv-example').innerHTML =
+      `💡 Ao registrar uma compra: <strong>1 ${pu} × ${R(pcost)}</strong> → ` +
+      `o sistema lança <strong>${conv} ${su}</strong> no estoque ao custo de ` +
+      `<strong>${R(scost)}/${su}</strong>`;
+  } else if(conv > 1){
+    convBox.style.display = 'block';
+    document.getElementById('prod-conv-example').innerHTML =
+      `📐 Fator ativo: 1 <strong>${pu}</strong> = ${conv} <strong>${su}</strong> no estoque`;
+  } else {
+    convBox.style.display = 'none';
+  }
+}
+
+function setProdCat(cat,btn){
+  prodCatFilter=cat;
+  document.querySelectorAll('#section-produtos .fpill').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active'); renderProducts();
+}
+
 function renderProducts(){
   const q=(document.getElementById('prod-search')?.value||'').toLowerCase();
   let items=S.products.filter(p=>p.active);
@@ -901,40 +1216,108 @@ function renderProducts(){
   document.getElementById('prod-count').textContent=items.length;
   const ccol={Diversas:'b-gray',Bioquímicos:'b-primary','Teste Rápido':'b-ok',Reagentes:'b-warn'};
   const tb=document.getElementById('prod-tbody');
-  if(!items.length){tb.innerHTML='<tr><td colspan="7"><div class="empty" style="padding:20px"><p>Nenhum produto encontrado</p></div></td></tr>';return;}
+  if(!items.length){tb.innerHTML='<tr><td colspan="8"><div class="empty" style="padding:20px"><p>Nenhum produto encontrado</p></div></td></tr>';return;}
   tb.innerHTML=items.map(p=>{
     const snames=p.supps.map(sid=>{const s=S.suppliers.find(x=>x.id===sid);return s?s.name:''}).filter(Boolean).join(', ');
-    return `<tr><td><strong>${p.name}</strong></td><td><span class="badge ${ccol[p.cat]||'b-gray'}">${p.cat}</span></td><td style="color:var(--muted)">${p.unit}</td><td>${p.min}</td><td class="mono">${p.cost>0?R(p.cost):'<span class="text-muted">—</span>'}</td><td style="font-size:12px;color:var(--muted);max-width:160px">${snames||'—'}</td><td><button class="btn btn-sm btn-outline" onclick="editProduct(${p.id})">Editar</button><button class="btn btn-sm btn-outline" style="color:var(--danger);margin-left:4px" onclick="delProduct(${p.id})">✕</button></td></tr>`;
+    const hasConv = p.convFactor > 1;
+    const convCell = hasConv
+      ? `<span class="uom-pill">${p.purchaseUnit}</span> <span class="conv-arrow">→</span> <span class="uom-pill">${p.stockUnit}</span>`
+      : `<span class="uom-pill">${p.stockUnit}</span>`;
+    const convFactorCell = hasConv
+      ? `<span class="badge b-indigo">1 ${p.purchaseUnit} = ${p.convFactor} ${p.stockUnit}</span>`
+      : `<span style="color:var(--muted);font-size:12px">1:1</span>`;
+    const costCell = p.cost > 0
+      ? `<span class="mono fw6">${R(p.cost)}</span><span style="color:var(--muted);font-size:11px">/${p.stockUnit}</span>
+         ${hasConv ? `<div style="font-size:10px;color:var(--muted)">${R(p.purchaseCost)}/${p.purchaseUnit}</div>` : ''}`
+      : '<span class="text-muted">—</span>';
+    return `<tr>
+      <td><strong>${p.name}</strong></td>
+      <td><span class="badge ${ccol[p.cat]||'b-gray'}">${p.cat}</span></td>
+      <td>${convCell}</td>
+      <td>${convFactorCell}</td>
+      <td>${costCell}</td>
+      <td>${p.min} <span style="font-size:11px;color:var(--muted)">${p.stockUnit}</span></td>
+      <td style="font-size:12px;color:var(--muted);max-width:150px">${snames||'—'}</td>
+      <td>
+        <button class="btn btn-sm btn-outline" onclick="editProduct(${p.id})">Editar</button>
+        <button class="btn btn-sm btn-outline" style="color:var(--danger);margin-left:4px" onclick="delProduct(${p.id})">✕</button>
+      </td>
+    </tr>`;
   }).join('');
 }
+
 function openProductModal(id){
   const ss=document.getElementById('prod-m-supps');
   ss.innerHTML=S.suppliers.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
-  if(id){const p=S.products.find(x=>x.id===id);document.getElementById('prod-m-title').textContent='Editar Produto';document.getElementById('prod-m-id').value=p.id;document.getElementById('prod-m-name').value=p.name;document.getElementById('prod-m-cat').value=p.cat;document.getElementById('prod-m-unit').value=p.unit;document.getElementById('prod-m-min').value=p.min;document.getElementById('prod-m-cost').value=p.cost;Array.from(ss.options).forEach(o=>o.selected=p.supps.includes(parseInt(o.value)));}
-  else{document.getElementById('prod-m-title').textContent='Novo Produto';['prod-m-id','prod-m-name','prod-m-cat'].forEach(i=>document.getElementById(i).value='');document.getElementById('prod-m-unit').value='Unidade';document.getElementById('prod-m-min').value=1;document.getElementById('prod-m-cost').value=0;Array.from(ss.options).forEach(o=>o.selected=false);}
+  if(id){
+    const p=S.products.find(x=>x.id===id);
+    document.getElementById('prod-m-title').textContent='Editar Produto';
+    document.getElementById('prod-m-id').value=p.id;
+    document.getElementById('prod-m-name').value=p.name;
+    document.getElementById('prod-m-cat').value=p.cat;
+    document.getElementById('prod-m-pu').value=p.purchaseUnit;
+    document.getElementById('prod-m-su').value=p.stockUnit;
+    document.getElementById('prod-m-conv').value=p.convFactor;
+    document.getElementById('prod-m-pcost').value=p.purchaseCost;
+    document.getElementById('prod-m-min').value=p.min;
+    Array.from(ss.options).forEach(o=>o.selected=p.supps.includes(parseInt(o.value)));
+  } else {
+    document.getElementById('prod-m-title').textContent='Novo Produto';
+    ['prod-m-id','prod-m-name'].forEach(i=>document.getElementById(i).value='');
+    document.getElementById('prod-m-cat').value='';
+    document.getElementById('prod-m-pu').value='Unidade';
+    document.getElementById('prod-m-su').value='Unidade';
+    document.getElementById('prod-m-conv').value=1;
+    document.getElementById('prod-m-pcost').value=0;
+    document.getElementById('prod-m-min').value=1;
+    Array.from(ss.options).forEach(o=>o.selected=false);
+  }
+  calcProdStockCost(); // Atualiza campos calculados
   openM('m-product');
 }
-function editProduct(id){openProductModal(id);}
+
+function editProduct(id){ openProductModal(id); }
+
 async function saveProduct(){
   const id=document.getElementById('prod-m-id').value;
   const name=document.getElementById('prod-m-name').value.trim();
   const cat=document.getElementById('prod-m-cat').value;
-  const unit=document.getElementById('prod-m-unit').value;
+  const pu=document.getElementById('prod-m-pu').value;
+  const su=document.getElementById('prod-m-su').value;
+  const conv=parseFloat(document.getElementById('prod-m-conv').value)||1;
+  const pcost=parseFloat(document.getElementById('prod-m-pcost').value)||0;
+  const scost=conv>0?pcost/conv:0; // custo por UNIDADE DE ESTOQUE
   const min=parseFloat(document.getElementById('prod-m-min').value)||0;
-  const cost=parseFloat(document.getElementById('prod-m-cost').value)||0;
   const supps=Array.from(document.getElementById('prod-m-supps').selectedOptions).map(o=>parseInt(o.value));
-  if(!name){alert('Informe o nome.');return;} if(!cat){alert('Selecione categoria.');return;}
+
+  if(!name){alert('Informe o nome do produto.');return;}
+  if(!cat){alert('Selecione uma categoria.');return;}
+
   setLoading(true);
   try{
     let prodId=id?parseInt(id):null;
-    if(id){await sb.from('products').update({name,cat,unit,min_stock:min,unit_cost:cost}).eq('id',prodId);}
-    else{const {data}=await sb.from('products').insert({name,cat,unit,min_stock:min,unit_cost:cost}).select().single();prodId=data.id;}
+    const productData={
+      name, cat,
+      unit: su,                   // unidade de ESTOQUE (campo 'unit' no DB)
+      purchase_unit: pu,          // unidade de COMPRA (novo campo)
+      conversion_factor: conv,    // fator de conversão (novo campo)
+      purchase_unit_cost: pcost,  // custo por unidade de COMPRA (novo campo)
+      unit_cost: scost,           // custo por unidade de ESTOQUE (calculado)
+      min_stock: min
+    };
+    if(id){
+      await sb.from('products').update(productData).eq('id',prodId);
+    } else {
+      const {data}=await sb.from('products').insert(productData).select().single();
+      prodId=data.id;
+    }
     await sb.from('product_suppliers').delete().eq('product_id',prodId);
     if(supps.length) await sb.from('product_suppliers').insert(supps.map(s=>({product_id:prodId,supplier_id:s})));
     closeM('m-product'); toast('Produto salvo!'); await loadAll();
-  }catch(e){alert('Erro: '+e.message);}
+  } catch(e){alert('Erro: '+e.message);}
   finally{setLoading(false);}
 }
+
 async function delProduct(id){
   if(!confirm('Inativar este produto?')) return;
   setLoading(true);
@@ -947,7 +1330,13 @@ function renderSuppliers(){
   const tb=document.getElementById('supp-tbody');
   tb.innerHTML=S.suppliers.map(s=>{
     const cnt=S.products.filter(p=>p.active&&p.supps.includes(s.id)).length;
-    return `<tr><td><strong>${s.name}</strong></td><td>${s.contact||'<span class="text-muted">—</span>'}</td><td>${s.phone||'<span class="text-muted">—</span>'}</td><td><span class="badge b-gray">${cnt} produto${cnt!==1?'s':''}</span></td><td><button class="btn btn-sm btn-outline" onclick="editSupplier(${s.id})">Editar</button></td></tr>`;
+    return `<tr>
+      <td><strong>${s.name}</strong></td>
+      <td>${s.contact||'<span class="text-muted">—</span>'}</td>
+      <td>${s.phone||'<span class="text-muted">—</span>'}</td>
+      <td><span class="badge b-gray">${cnt} produto${cnt!==1?'s':''}</span></td>
+      <td><button class="btn btn-sm btn-outline" onclick="editSupplier(${s.id})">Editar</button></td>
+    </tr>`;
   }).join('');
 }
 function openSupplierModal(id){
@@ -955,7 +1344,7 @@ function openSupplierModal(id){
   else{document.getElementById('supp-m-title').textContent='Novo Fornecedor';['supp-m-id','supp-m-name','supp-m-contact','supp-m-phone'].forEach(i=>document.getElementById(i).value='');}
   openM('m-supplier');
 }
-function editSupplier(id){openSupplierModal(id);}
+function editSupplier(id){ openSupplierModal(id); }
 async function saveSupplier(){
   const id=document.getElementById('supp-m-id').value;
   const name=document.getElementById('supp-m-name').value.trim();
@@ -963,8 +1352,8 @@ async function saveSupplier(){
   const phone=document.getElementById('supp-m-phone').value.trim();
   if(!name){alert('Informe o nome.');return;}
   setLoading(true);
-  if(id){await sb.from('suppliers').update({name,contact,phone}).eq('id',parseInt(id));}
-  else{await sb.from('suppliers').insert({name,contact,phone});}
+  if(id) await sb.from('suppliers').update({name,contact,phone}).eq('id',parseInt(id));
+  else await sb.from('suppliers').insert({name,contact,phone});
   closeM('m-supplier'); toast('Fornecedor salvo!'); await loadAll(); setLoading(false);
 }
 
@@ -978,22 +1367,110 @@ function getLowAlerts(){
     return {p,qty,sName:supp?supp.name:'—',sPhone:supp?.phone||'—'};
   }).filter(Boolean);
 }
-function updateAlertBadge(){const n=getLowAlerts().length;const b=document.getElementById('alert-badge');b.textContent=n;b.classList.toggle('show',n>0);}
+function updateAlertBadge(){
+  const n=getLowAlerts().length;
+  const b=document.getElementById('alert-badge');
+  b.textContent=n; b.classList.toggle('show',n>0);
+}
 function renderAlerts(){
   const alerts=getLowAlerts(); const tb=document.getElementById('alert-tbody');
-  if(!alerts.length){tb.innerHTML='<tr><td colspan="7"><div class="empty"><div class="ei">✅</div><h3>Tudo em dia!</h3><p>Nenhum item abaixo do mínimo.</p></div></td></tr>';return;}
+  if(!alerts.length){
+    tb.innerHTML='<tr><td colspan="8"><div class="empty"><div class="ei">✅</div><h3>Tudo em dia!</h3></div></td></tr>';return;
+  }
   const ccol={Diversas:'b-gray',Bioquímicos:'b-primary','Teste Rápido':'b-ok',Reagentes:'b-warn'};
-  tb.innerHTML=alerts.map(a=>`<tr><td><strong>${a.p.name}</strong></td><td><span class="badge ${ccol[a.p.cat]||'b-gray'}" style="font-size:10px">${a.p.cat}</span></td><td><strong class="text-danger">${a.qty}</strong> ${a.p.unit}</td><td>${a.p.min} ${a.p.unit}</td><td><span class="badge b-danger">−${a.p.min-a.qty}</span></td><td>${a.sName}</td><td>${a.sPhone}</td></tr>`).join('');
+  tb.innerHTML=alerts.map(a=>{
+    const deficit=a.p.min-a.qty;
+    const custoReposicao=deficit*a.p.cost;
+    return `<tr>
+      <td><strong>${a.p.name}</strong></td>
+      <td><span class="badge ${ccol[a.p.cat]||'b-gray'}" style="font-size:10px">${a.p.cat}</span></td>
+      <td><strong class="text-danger">${a.qty}</strong> <span class="uom-pill">${a.p.stockUnit}</span></td>
+      <td>${a.p.min} <span class="uom-pill">${a.p.stockUnit}</span></td>
+      <td><span class="badge b-danger">−${deficit}</span></td>
+      <td class="mono fw6">${R(custoReposicao)}</td>
+      <td>${a.sName}</td>
+      <td>${a.sPhone}</td>
+    </tr>`;
+  }).join('');
 }
 
 // ─── UTILS ────────────────────────────────────────────────────
-function R(v){if(v===null||v===undefined||isNaN(v))return '—';return new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(v);}
-function fmtDate(d){if(!d)return '—';return new Date(d+'T12:00:00').toLocaleDateString('pt-BR');}
-function today(){return new Date().toISOString().split('T')[0];}
-function openM(id){document.getElementById(id).classList.add('open');document.body.style.overflow='hidden';}
-function closeM(id){document.getElementById(id).classList.remove('open');document.body.style.overflow='';}
+function R(v){ if(v===null||v===undefined||isNaN(v)) return '—'; return new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(v); }
+function fmtDate(d){ if(!d) return '—'; return new Date(d+'T12:00:00').toLocaleDateString('pt-BR'); }
+function today(){ return new Date().toISOString().split('T')[0]; }
+function cost_per_stock(purchaseCost, convFactor){ return (convFactor && convFactor > 0) ? purchaseCost / convFactor : purchaseCost; }
+function openM(id){ document.getElementById(id).classList.add('open'); document.body.style.overflow='hidden'; }
+function closeM(id){ document.getElementById(id).classList.remove('open'); document.body.style.overflow=''; }
 
-document.querySelectorAll('.mo').forEach(el=>{el.addEventListener('click',function(e){if(e.target===this)closeM(this.id);});});
+document.querySelectorAll('.mo').forEach(el=>{
+  el.addEventListener('click', function(e){ if(e.target===this) closeM(this.id); });
+});
+
+// ─── QUICK EDIT UOM ───────────────────────────────────────────
+const QE_PU = ['Unidade','Kit','Caixa','Saco','Frasco','Litro','Pacote','Embalagem','Rolo'];
+const QE_SU = ['Unidade','Dia','Teste','mL','Lâmina','Tubo','Tira','Par','Pacote'];
+
+function openQuickEdit(){
+  const ccol={Diversas:'b-gray',Bioquímicos:'b-primary','Teste Rápido':'b-ok',Reagentes:'b-warn'};
+  const prods = S.products.filter(p=>p.active).sort((a,b)=>a.cat.localeCompare(b.cat)||a.name.localeCompare(b.name));
+  document.getElementById('qe-tbody').innerHTML = prods.map(p=>{
+    const puOpts = QE_PU.map(u=>`<option${u===p.purchaseUnit?' selected':''}>${u}</option>`).join('');
+    const suOpts = QE_SU.map(u=>`<option${u===p.stockUnit?' selected':''}>${u}</option>`).join('');
+    return `<tr>
+      <td>
+        <div style="font-weight:600;font-size:13px;line-height:1.3">${p.name}</div>
+        <span class="badge ${ccol[p.cat]||'b-gray'}" style="font-size:10px;margin-top:3px">${p.cat}</span>
+      </td>
+      <td><select class="qe-select" id="qe-pu-${p.id}" onchange="calcQERow(${p.id})">${puOpts}</select></td>
+      <td><select class="qe-select" id="qe-su-${p.id}" onchange="calcQERow(${p.id})">${suOpts}</select></td>
+      <td><input type="number" class="qe-input" id="qe-conv-${p.id}" value="${p.convFactor||1}" min="1" step="1" oninput="calcQERow(${p.id})"></td>
+      <td><input type="number" class="qe-input" id="qe-pcost-${p.id}" value="${p.purchaseCost||0}" min="0" step="0.01" oninput="calcQERow(${p.id})"></td>
+      <td><input class="qe-cost" id="qe-scost-${p.id}" readonly></td>
+    </tr>`;
+  }).join('');
+  prods.forEach(p=>calcQERow(p.id));
+  openM('m-quickedit');
+}
+
+function calcQERow(pid){
+  const conv  = parseFloat(document.getElementById(`qe-conv-${pid}`)?.value)  || 1;
+  const pcost = parseFloat(document.getElementById(`qe-pcost-${pid}`)?.value) || 0;
+  const scost = conv > 0 ? pcost / conv : 0;
+  const el = document.getElementById(`qe-scost-${pid}`);
+  if(el) el.value = pcost > 0 ? R(scost) : '—';
+}
+
+async function saveQuickEdit(){
+  const prods = S.products.filter(p=>p.active);
+  if(!confirm(`Atualizar ${prods.length} produtos com os valores preenchidos?`)) return;
+  setLoading(true);
+  try{
+    const updates = prods.map(p=>{
+      const pu    = document.getElementById(`qe-pu-${p.id}`)?.value    || p.purchaseUnit;
+      const su    = document.getElementById(`qe-su-${p.id}`)?.value    || p.stockUnit;
+      const conv  = parseFloat(document.getElementById(`qe-conv-${p.id}`)?.value)  || 1;
+      const pcost = parseFloat(document.getElementById(`qe-pcost-${p.id}`)?.value) || 0;
+      const scost = conv > 0 ? pcost / conv : 0;
+      return sb.from('products').update({
+        purchase_unit:       pu,
+        unit:                su,
+        conversion_factor:   conv,
+        purchase_unit_cost:  pcost,
+        unit_cost:           scost
+      }).eq('id', p.id);
+    });
+    const results = await Promise.all(updates);
+    const erros   = results.filter(r=>r.error);
+    if(erros.length > 0){
+      alert(`${erros.length} produto(s) com erro. Verifique e tente novamente.`);
+      return;
+    }
+    closeM('m-quickedit');
+    toast(`${prods.length} produtos atualizados com sucesso!`);
+    await loadAll();
+  } catch(e){ alert('Erro: '+e.message); }
+  finally{ setLoading(false); }
+}
 
 // ─── INIT ─────────────────────────────────────────────────────
 loadAll().then(startRealtime);
