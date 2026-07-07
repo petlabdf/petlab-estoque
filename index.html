@@ -191,8 +191,8 @@ input[readonly]{background:#F8FAFC;cursor:default;color:var(--primary-d);font-we
      CREDENCIAIS SUPABASE
 ════════════════════════════════════════════════════════════ -->
 <script>
-const SUPABASE_URL = 'https://mxiqwmjrotjjumsxmprf.supabase.co';
-const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
+const SUPABASE_URL = 'COLE_SUA_URL_AQUI';
+const SUPABASE_KEY = 'COLE_SUA_CHAVE_AQUI';
 </script>
 
 <aside class="sidebar">
@@ -393,10 +393,11 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
 <div class="mo" id="m-count">
   <div class="modal modal-xl">
     <div class="modal-hdr">
-      <div><h3>Nova Contagem de Estoque</h3><div class="msub">Informe as quantidades na <strong>unidade de estoque</strong> de cada item</div></div>
+      <div><h3 id="cnt-modal-title">Nova Contagem de Estoque</h3><div class="msub">Informe as quantidades na <strong>unidade de estoque</strong> de cada item</div></div>
       <button class="modal-x" onclick="closeM('m-count')">×</button>
     </div>
     <div class="modal-body">
+      <input type="hidden" id="cnt-edit-id">
       <div class="fr3" style="margin-bottom:14px">
         <div class="fg" style="margin:0"><label>Período *</label><select id="cnt-period" onchange="onCountPeriodChange()"><option value="">— Selecione —</option></select></div>
         <div class="fg" style="margin:0"><label>Tipo *</label><select id="cnt-type"><option value="abertura">Abertura</option><option value="fechamento">Fechamento</option></select></div>
@@ -433,15 +434,16 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
         </table>
       </div>
     </div>
-    <div class="modal-foot"><button class="btn btn-outline" onclick="closeM('m-count')">Cancelar</button><button class="btn btn-primary" onclick="saveCount()">Salvar Contagem</button></div>
+    <div class="modal-foot"><button class="btn btn-outline" onclick="closeM('m-count')">Cancelar</button><button class="btn btn-primary" id="cnt-save-btn" onclick="saveCount()">Salvar Contagem</button></div>
   </div>
 </div>
 
 <!-- COMPRA -->
 <div class="mo" id="m-purchase">
   <div class="modal">
-    <div class="modal-hdr"><h3>Registrar Compra</h3><button class="modal-x" onclick="closeM('m-purchase')">×</button></div>
+    <div class="modal-hdr"><h3 id="pu-modal-title">Registrar Compra</h3><button class="modal-x" onclick="closeM('m-purchase')">×</button></div>
     <div class="modal-body">
+      <input type="hidden" id="pu-edit-id">
       <div class="fr">
         <div class="fg"><label>Data *</label><input type="date" id="pu-date"></div>
         <div class="fg"><label>Período *</label><select id="pu-period"><option value="">— Selecione —</option></select></div>
@@ -470,7 +472,7 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
 
       <div class="fg"><label>Total da Compra</label><input type="text" id="pu-total" readonly style="font-weight:700;color:var(--primary)"></div>
     </div>
-    <div class="modal-foot"><button class="btn btn-outline" onclick="closeM('m-purchase')">Cancelar</button><button class="btn btn-primary" onclick="savePurchase()">Registrar</button></div>
+    <div class="modal-foot"><button class="btn btn-outline" onclick="closeM('m-purchase')">Cancelar</button><button class="btn btn-primary" id="pu-save-btn" onclick="savePurchase()">Registrar</button></div>
   </div>
 </div>
 
@@ -558,6 +560,25 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
       </div>
     </div>
     <div class="modal-foot"><button class="btn btn-outline" onclick="closeM('m-supplier')">Cancelar</button><button class="btn btn-primary" onclick="saveSupplier()">Salvar</button></div>
+  </div>
+</div>
+
+<!-- EDITAR PERÍODO -->
+<div class="mo" id="m-period-edit">
+  <div class="modal" style="max-width:460px">
+    <div class="modal-hdr"><h3>Editar Período</h3><button class="modal-x" onclick="closeM('m-period-edit')">×</button></div>
+    <div class="modal-body">
+      <input type="hidden" id="pe-id">
+      <div class="fg"><label>Nome do Período *</label><input type="text" id="pe-label"></div>
+      <div class="fr">
+        <div class="fg"><label>Data de Início *</label><input type="date" id="pe-start"></div>
+        <div class="fg" id="pe-end-grp"><label>Data de Fim</label><input type="date" id="pe-end"></div>
+      </div>
+      <div class="alert alert-warn" style="margin-bottom:0">
+        <span>⚠️</span><span>O tipo do período não pode ser alterado para não comprometer os dados de contagem vinculados.</span>
+      </div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-outline" onclick="closeM('m-period-edit')">Cancelar</button><button class="btn btn-primary" onclick="savePeriodEdit()">Salvar Alterações</button></div>
   </div>
 </div>
 
@@ -829,7 +850,7 @@ function renderPeriods(){
     const oc=p.openCountId?S.counts.find(c=>c.id===p.openCountId):null;
     const cc=p.closeCountId?S.counts.find(c=>c.id===p.closeCountId):null;
     const cmv=p.status==='fechado'?calcCMV(p.id):null;
-    let acts='';
+    let acts=`<button class="btn btn-sm btn-outline" onclick="editPeriod(${p.id})">Editar</button> `;
     if(p.status==='aberto'){
       if(p.openCountId&&(p.type==='implantacao'||p.closeCountId))
         acts+=`<button class="btn btn-sm btn-primary" onclick="closePeriod(${p.id})">Fechar</button> `;
@@ -850,6 +871,10 @@ function renderPeriods(){
 
 // ─── STOCK COUNTS ─────────────────────────────────────────────
 function openCountModal(){
+  // Reseta modo edição
+  document.getElementById('cnt-edit-id').value='';
+  document.getElementById('cnt-modal-title').textContent='Nova Contagem de Estoque';
+  document.getElementById('cnt-save-btn').textContent='Salvar Contagem';
   const ps=S.periods.filter(p=>p.status==='aberto');
   document.getElementById('cnt-period').innerHTML='<option value="">— Selecione —</option>'+ps.map(p=>`<option value="${p.id}">${p.label}</option>`).join('');
   document.getElementById('cnt-date').value=today();
@@ -917,22 +942,37 @@ async function saveCount(){
   const periodId=parseInt(document.getElementById('cnt-period').value);
   const type=document.getElementById('cnt-type').value;
   const date=document.getElementById('cnt-date').value;
+  const editId=document.getElementById('cnt-edit-id').value;
   if(!periodId||isNaN(periodId)){alert('Selecione um período.');return;}
   if(!date){alert('Informe a data.');return;}
   setLoading(true);
   try{
-    const {data:cnt,error:e1}=await sb.from('stock_counts').insert({period_id:periodId,type,date}).select().single();
-    if(e1) throw e1;
+    let countId;
+    if(editId){
+      // Edição: atualiza o registro e reinsere os itens
+      countId=parseInt(editId);
+      const {error:e0}=await sb.from('stock_counts').update({period_id:periodId,type,date}).eq('id',countId);
+      if(e0) throw e0;
+      const {error:eDel}=await sb.from('count_items').delete().eq('count_id',countId);
+      if(eDel) throw eDel;
+    } else {
+      // Novo registro
+      const {data:cnt,error:e1}=await sb.from('stock_counts').insert({period_id:periodId,type,date}).select().single();
+      if(e1) throw e1;
+      countId=cnt.id;
+      const field=(type==='fechamento')?'close_count_id':'open_count_id';
+      await sb.from('periods').update({[field]:countId}).eq('id',periodId);
+    }
     const items=S.products.filter(p=>p.active).map(p=>{
       const f=parseInt(document.getElementById('cf-'+p.id)?.value)||0;
       const a=parseInt(document.getElementById('ca-'+p.id)?.value)||0;
-      return {count_id:cnt.id,product_id:p.id,qty_closed:f,qty_open:a,total:f+a,cost_snapshot:p.cost};
+      return {count_id:countId,product_id:p.id,qty_closed:f,qty_open:a,total:f+a,cost_snapshot:p.cost};
     });
     const {error:e2}=await sb.from('count_items').insert(items);
     if(e2) throw e2;
-    const field=(type==='fechamento')?'close_count_id':'open_count_id';
-    await sb.from('periods').update({[field]:cnt.id}).eq('id',periodId);
-    closeM('m-count'); toast('Contagem salva!'); await loadAll();
+    closeM('m-count');
+    toast(editId?'Contagem atualizada!':'Contagem salva!');
+    await loadAll();
   } catch(e){alert('Erro: '+e.message);}
   finally{setLoading(false);}
 }
@@ -961,13 +1001,17 @@ function renderCounts(){
       <td><span class="badge ${c.type==='fechamento'?'b-ok':'b-primary'}">${lbls[c.type]||c.type}</span></td>
       <td>${c.items.filter(i=>i.total>0).length} itens</td>
       <td class="mono fw6 text-primary">${R(countVal(c))}</td>
-      <td><button class="btn btn-sm btn-outline" style="color:var(--danger)" onclick="deleteCount(${c.id})">✕ Excluir</button></td>
+      <td style="white-space:nowrap"><button class="btn btn-sm btn-outline" onclick="editCount(${c.id})">Editar</button> <button class="btn btn-sm btn-outline" style="color:var(--danger);margin-left:4px" onclick="deleteCount(${c.id})">✕</button></td>
     </tr>`;
   }).join('');
 }
 
 // ─── PURCHASES ────────────────────────────────────────────────
 function openPurchaseModal(){
+  // Reseta modo edição
+  document.getElementById('pu-edit-id').value='';
+  document.getElementById('pu-modal-title').textContent='Registrar Compra';
+  document.getElementById('pu-save-btn').textContent='Registrar';
   document.getElementById('pu-date').value=today();
   const ps=S.periods.filter(p=>p.status==='aberto');
   document.getElementById('pu-period').innerHTML='<option value="">— Selecione —</option>'+ps.map(p=>`<option value="${p.id}">${p.label}</option>`).join('');
@@ -975,7 +1019,6 @@ function openPurchaseModal(){
     S.products.filter(p=>p.active).sort((a,b)=>a.name.localeCompare(b.name))
     .map(p=>`<option value="${p.id}">${p.name} (${p.cat})</option>`).join('');
   document.getElementById('pu-supplier').innerHTML='<option value="">— Selecione —</option>'+S.suppliers.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
-  // Reseta UI
   document.getElementById('pu-qty-lbl').textContent='Quantidade *';
   document.getElementById('pu-cost-lbl').textContent='Custo Unitário (R$) *';
   document.getElementById('pu-uom-box').style.display='none';
@@ -1052,24 +1095,29 @@ async function savePurchase(){
   // CÁLCULO CORRETO: custo por unidade de estoque = custo_compra / fator
   const stockUnitCost = cost > 0 ? cost / convFactor : 0;
 
+  const editId = document.getElementById('pu-edit-id').value;
   setLoading(true);
-  // Armazena qty em unidades de COMPRA; total = dinheiro gasto (correto para CMV)
-  const {error}=await sb.from('purchases').insert({
-    period_id:periodId, product_id:prodId, supplier_id:suppId,
-    date, qty, cost, total: qty * cost
-  });
-
+  let error;
+  if(editId){
+    ({error} = await sb.from('purchases').update({
+      period_id:periodId, product_id:prodId, supplier_id:suppId,
+      date, qty, cost, total: qty * cost
+    }).eq('id', parseInt(editId)));
+  } else {
+    ({error} = await sb.from('purchases').insert({
+      period_id:periodId, product_id:prodId, supplier_id:suppId,
+      date, qty, cost, total: qty * cost
+    }));
+  }
   if(!error && cost > 0){
-    // Atualiza produto com novo custo calculado por unidade de ESTOQUE
     await sb.from('products').update({
       unit_cost: stockUnitCost,
       purchase_unit_cost: cost
     }).eq('id', prodId);
   }
-
   if(error){setLoading(false);alert('Erro: '+error.message);return;}
   closeM('m-purchase');
-  toast('Compra registrada! Custo por unidade de estoque atualizado.');
+  toast(editId ? 'Compra atualizada!' : 'Compra registrada!');
   await loadAll(); setLoading(false);
 }
 
@@ -1106,7 +1154,7 @@ function renderPurchases(){
       <td class="mono ${convFactor>1?'text-primary':'text-muted'}">${R(stockCostFromPurchase)}<span style="font-size:10px">/${stockUnit}</span></td>
       <td class="mono fw6 text-primary">${R(c.total)}</td>
       <td style="font-size:12px;color:var(--muted)">${per?per.label:'—'}</td>
-      <td><button class="btn btn-sm btn-outline" style="color:var(--danger)" onclick="deletePurchase(${c.id})">✕</button></td>
+      <td style="white-space:nowrap"><button class="btn btn-sm btn-outline" onclick="editPurchase(${c.id})">Editar</button> <button class="btn btn-sm btn-outline" style="color:var(--danger);margin-left:4px" onclick="deletePurchase(${c.id})">✕</button></td>
     </tr>`;
   }).join('');
 }
@@ -1405,6 +1453,86 @@ function closeM(id){ document.getElementById(id).classList.remove('open'); docum
 document.querySelectorAll('.mo').forEach(el=>{
   el.addEventListener('click', function(e){ if(e.target===this) closeM(this.id); });
 });
+
+// ─── EDIT FUNCTIONS ───────────────────────────────────────────
+function editPurchase(id){
+  const c=S.purchases.find(x=>x.id===id); if(!c) return;
+  // Constrói selects incluindo o período da compra mesmo se fechado
+  const allPeriods=[...S.periods];
+  document.getElementById('pu-period').innerHTML='<option value="">— Selecione —</option>'+
+    allPeriods.map(p=>`<option value="${p.id}">${p.label}${p.status==='fechado'?' (fechado)':''}</option>`).join('');
+  document.getElementById('pu-product').innerHTML='<option value="">— Selecione —</option>'+
+    S.products.filter(p=>p.active).sort((a,b)=>a.name.localeCompare(b.name))
+    .map(p=>`<option value="${p.id}">${p.name} (${p.cat})</option>`).join('');
+  document.getElementById('pu-supplier').innerHTML='<option value="">— Selecione —</option>'+
+    S.suppliers.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+  // Modo edição
+  document.getElementById('pu-edit-id').value=id;
+  document.getElementById('pu-modal-title').textContent='Editar Compra';
+  document.getElementById('pu-save-btn').textContent='Salvar Alterações';
+  // Preenche campos
+  document.getElementById('pu-date').value=c.date;
+  document.getElementById('pu-period').value=c.periodId;
+  document.getElementById('pu-product').value=c.prodId;
+  onPurchaseProduct(); // carrega contexto UOM
+  document.getElementById('pu-qty').value=c.qty;
+  document.getElementById('pu-cost').value=c.cost;
+  if(c.suppId) document.getElementById('pu-supplier').value=c.suppId;
+  calcPuTotal();
+  openM('m-purchase');
+}
+
+function editCount(id){
+  const cnt=S.counts.find(c=>c.id===id); if(!cnt) return;
+  // Constrói select de períodos incluindo o período da contagem
+  document.getElementById('cnt-period').innerHTML='<option value="">— Selecione —</option>'+
+    S.periods.map(p=>`<option value="${p.id}">${p.label}${p.status==='fechado'?' (fechado)':''}</option>`).join('');
+  // Modo edição
+  document.getElementById('cnt-edit-id').value=id;
+  document.getElementById('cnt-modal-title').textContent='Editar Contagem';
+  document.getElementById('cnt-save-btn').textContent='Salvar Alterações';
+  // Preenche campos de cabeçalho
+  document.getElementById('cnt-date').value=cnt.date;
+  document.getElementById('cnt-period').value=cnt.periodId;
+  document.getElementById('cnt-type').value=cnt.type;
+  // Constrói tabela zerada e depois preenche com os valores existentes
+  buildCountTable();
+  cnt.items.forEach(item=>{
+    const fEl=document.getElementById(`cf-${item.pid}`);
+    const aEl=document.getElementById(`ca-${item.pid}`);
+    if(fEl) fEl.value=item.f||0;
+    if(aEl) aEl.value=item.a||0;
+    updRow(item.pid);
+  });
+  openM('m-count');
+}
+
+function editPeriod(id){
+  const p=S.periods.find(x=>x.id===id); if(!p) return;
+  document.getElementById('pe-id').value=id;
+  document.getElementById('pe-label').value=p.label;
+  document.getElementById('pe-start').value=p.start;
+  document.getElementById('pe-end').value=p.end||'';
+  document.getElementById('pe-end-grp').style.display=p.type==='implantacao'?'none':'block';
+  openM('m-period-edit');
+}
+
+async function savePeriodEdit(){
+  const id=parseInt(document.getElementById('pe-id').value);
+  const label=document.getElementById('pe-label').value.trim();
+  const start=document.getElementById('pe-start').value;
+  const end=document.getElementById('pe-end').value;
+  if(!label){alert('Informe o nome do período.');return;}
+  if(!start){alert('Informe a data de início.');return;}
+  setLoading(true);
+  const {error}=await sb.from('periods').update({
+    label, start_date:start, end_date:end||null
+  }).eq('id',id);
+  if(error){setLoading(false);alert('Erro: '+error.message);return;}
+  closeM('m-period-edit');
+  toast('Período atualizado!');
+  await loadAll(); setLoading(false);
+}
 
 // ─── QUICK EDIT UOM ───────────────────────────────────────────
 const QE_PU = ['Unidade','Kit','Caixa','Saco','Frasco','Litro','Pacote','Embalagem','Rolo'];
