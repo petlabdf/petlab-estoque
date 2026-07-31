@@ -404,6 +404,12 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
         <div class="fg" style="margin:0"><label>Data *</label><input type="date" id="cnt-date"></div>
       </div>
       <div class="divider"></div>
+      <div class="alert alert-info" id="cnt-uom-explainer" style="margin-bottom:14px">
+        <span>💡</span>
+        <span><strong>Fechado</strong> = quantidade de pacotes/caixas/sacos fechados (contagem exata, na unidade de compra).
+        <strong>Aberto/Solto</strong> = quantidade solta na unidade de estoque, apenas do pacote em uso.
+        O sistema calcula o total automaticamente: Fechado × Fator + Aberto.</span>
+      </div>
       <div class="filter-bar" id="cnt-filters">
         <button class="fpill active" onclick="filterCntTable('',this)">Todos</button>
         <button class="fpill" onclick="filterCntTable('Diversas',this)">Diversas</button>
@@ -419,8 +425,8 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
               <th>Cat.</th>
               <th>Unid. Estoque</th>
               <th>Custo/Unid.</th>
-              <th style="text-align:center">Fechado</th>
-              <th style="text-align:center">Aberto</th>
+              <th style="text-align:center">Fechado<br><span style="font-weight:400;text-transform:none;font-size:9.5px">(pacotes/caixas)</span></th>
+              <th style="text-align:center">Aberto/Solto<br><span style="font-weight:400;text-transform:none;font-size:9.5px">(unid. estoque)</span></th>
               <th style="text-align:center">Total</th>
               <th style="text-align:right">Valor</th>
             </tr>
@@ -907,8 +913,14 @@ function buildCountTable(){
       <td><span class="badge ${ccol[p.cat]||'b-gray'}" style="font-size:10px">${p.cat}</span></td>
       <td><span class="uom-pill">${p.stockUnit}</span></td>
       <td class="mono" style="color:var(--muted);font-size:12px">${p.cost>0?R(p.cost)+'<span style="color:var(--muted);font-weight:400">/' + p.stockUnit + '</span>':'—'}</td>
-      <td style="text-align:center"><input type="number" class="cnt-input" id="cf-${p.id}" min="0" value="0" oninput="updRow(${p.id})"></td>
-      <td style="text-align:center"><input type="number" class="cnt-input" id="ca-${p.id}" min="0" value="0" oninput="updRow(${p.id})"></td>
+      <td style="text-align:center">
+        <input type="number" class="cnt-input" id="cf-${p.id}" min="0" value="0" oninput="updRow(${p.id})">
+        <div style="font-size:9px;color:var(--muted);margin-top:2px">${p.purchaseUnit}</div>
+      </td>
+      <td style="text-align:center">
+        <input type="number" class="cnt-input" id="ca-${p.id}" min="0" value="0" oninput="updRow(${p.id})">
+        <div style="font-size:9px;color:var(--muted);margin-top:2px">${p.stockUnit}</div>
+      </td>
       <td style="text-align:center;font-weight:700" id="ct-${p.id}">0</td>
       <td style="text-align:right;font-family:'DM Mono',monospace" id="cv-${p.id}">${R(0)}</td>
     </tr>`;
@@ -920,20 +932,24 @@ function filterCntTable(cat,btn){
   document.querySelectorAll('#cnt-tbody tr').forEach(r=>{r.style.display=(!cat||r.dataset.cat===cat)?'':'none';});
 }
 function updRow(pid){
-  const f=parseInt(document.getElementById('cf-'+pid)?.value)||0;
-  const a=parseInt(document.getElementById('ca-'+pid)?.value)||0;
+  const closed=parseInt(document.getElementById('cf-'+pid)?.value)||0; // em UNIDADE DE COMPRA (pacotes/caixas fechados)
+  const open=parseInt(document.getElementById('ca-'+pid)?.value)||0;   // em UNIDADE DE ESTOQUE (solto/avulso)
   const p=S.products.find(x=>x.id===pid);
-  document.getElementById('ct-'+pid).textContent=f+a;
+  const factor=p?(p.convFactor||1):1;
+  const total=(closed*factor)+open; // total sempre em UNIDADE DE ESTOQUE
+  document.getElementById('ct-'+pid).textContent=total;
   // Usa unit_cost (custo por UNIDADE DE ESTOQUE) — agora sempre correto
-  document.getElementById('cv-'+pid).textContent=R((f+a)*(p?p.cost:0));
+  document.getElementById('cv-'+pid).textContent=R(total*(p?p.cost:0));
   updTotals();
 }
 function updTotals(){
   let q=0,v=0;
   S.products.filter(p=>p.active).forEach(p=>{
-    const f=parseInt(document.getElementById('cf-'+p.id)?.value)||0;
-    const a=parseInt(document.getElementById('ca-'+p.id)?.value)||0;
-    q+=f+a; v+=(f+a)*p.cost;  // p.cost = custo por unidade de estoque
+    const closed=parseInt(document.getElementById('cf-'+p.id)?.value)||0;
+    const open=parseInt(document.getElementById('ca-'+p.id)?.value)||0;
+    const factor=p.convFactor||1;
+    const total=(closed*factor)+open;
+    q+=total; v+=total*p.cost;  // p.cost = custo por unidade de estoque
   });
   document.getElementById('cnt-tot-qty').textContent=q;
   document.getElementById('cnt-tot-val').textContent=R(v);
@@ -964,9 +980,11 @@ async function saveCount(){
       await sb.from('periods').update({[field]:countId}).eq('id',periodId);
     }
     const items=S.products.filter(p=>p.active).map(p=>{
-      const f=parseInt(document.getElementById('cf-'+p.id)?.value)||0;
-      const a=parseInt(document.getElementById('ca-'+p.id)?.value)||0;
-      return {count_id:countId,product_id:p.id,qty_closed:f,qty_open:a,total:f+a,cost_snapshot:p.cost};
+      const f=parseInt(document.getElementById('cf-'+p.id)?.value)||0; // pacotes/caixas fechados (unid. compra)
+      const a=parseInt(document.getElementById('ca-'+p.id)?.value)||0; // solto (unid. estoque)
+      const factor=p.convFactor||1;
+      const total=(f*factor)+a; // total sempre em unidade de estoque
+      return {count_id:countId,product_id:p.id,qty_closed:f,qty_open:a,total,cost_snapshot:p.cost};
     });
     const {error:e2}=await sb.from('count_items').insert(items);
     if(e2) throw e2;
