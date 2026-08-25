@@ -164,15 +164,109 @@ input[readonly]{background:#F8FAFC;cursor:default;color:var(--primary-d);font-we
 .qe-cost{width:100%;padding:5px 7px;background:#F0FDF4;border:1.5px solid #86EFAC;border-radius:5px;font-size:12px;font-family:'DM Mono',monospace;color:#065F46;font-weight:600;cursor:default}
 .qe-scroll{max-height:68vh;overflow-y:auto}
 .qe-warn{background:var(--warn-l);border:1px solid var(--warn);border-radius:7px;padding:10px 14px;font-size:12.5px;color:#92400E;margin-bottom:0}
+
+/* ── PLANEJAMENTO DE COMPRAS ─────────────────────────────────── */
+.pp-in{width:108px;padding:6px 8px;font-size:12.5px;font-family:'DM Mono',monospace;text-align:right}
+.pp-in-notes{width:150px;padding:6px 8px;font-size:12px;text-align:left}
+.pp-calc{font-family:'DM Mono',monospace;font-weight:700;font-size:13px}
+.pp-div{font-size:9.5px;margin-top:3px;color:#92400E;font-weight:600;line-height:1.3}
+.pp-delta{font-size:10px;font-weight:700;margin-left:4px}
+.pp-now td{background:#F0FDFA !important}
+.pp-week-lbl{font-weight:700;font-size:13px;white-space:nowrap}
+.pp-week-sub{font-size:10.5px;color:var(--muted);margin-top:2px}
+.pp-headband{display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap}
+.pp-headband .fg{margin:0}
+.pp-due{font-size:9.5px;margin-top:3px;font-weight:600;line-height:1.3;cursor:pointer;color:var(--indigo)}
+.pp-due:hover{text-decoration:underline}
+
+/* ── CAIXA E COMPRAS (PARCELAMENTOS) ─────────────────────────── */
+.cc-month-row{cursor:pointer}
+.cc-month-row td{font-weight:600}
+.cc-caret{display:inline-block;width:14px;color:var(--muted);transition:transform .15s;font-size:11px}
+.cc-caret.open{transform:rotate(90deg)}
+.cc-detail td{background:#F8FAFC;padding:0 !important}
+.cc-detail table{background:#F8FAFC}
+.cc-detail thead th{background:#EEF2F7;font-size:10px}
+.cc-detail tbody td{padding:8px 14px;font-size:12.5px;border-bottom:1px solid #E8EDF3}
+.cc-in-date{width:140px;padding:5px 8px;font-size:12px}
+.cc-in-amt{width:110px;padding:5px 8px;font-size:12px;font-family:'DM Mono',monospace;text-align:right}
+.cc-chk{width:16px;height:16px;cursor:pointer;accent-color:var(--primary)}
+.cc-prev-scroll{max-height:34vh;overflow-y:auto;border:1px solid var(--border);border-radius:8px}
+.cc-prev-scroll table thead th{position:sticky;top:0}
+.cc-total-chk{display:flex;align-items:center;gap:8px;justify-content:flex-end;margin-top:10px;font-size:12.5px}
+.cc-bar{height:6px;background:#E2E8F0;border-radius:100px;overflow:hidden;width:90px}
+.cc-bar span{display:block;height:100%;background:var(--primary)}
 </style>
 </head>
 <body>
 
 <!--
   ════════════════════════════════════════════════════════════════
-  MIGRAÇÃO SUPABASE — rodar no SQL Editor antes de usar esta v4:
+  MIGRAÇÃO SUPABASE — rodar no SQL Editor antes de usar esta v6:
   ════════════════════════════════════════════════════════════════
-  -- Tabela de unidades (lista livre, editável pela aba "Unidades")
+  -- Compras parceladas e cronograma de desembolso
+  CREATE TABLE IF NOT EXISTS commitments (
+    id            BIGSERIAL PRIMARY KEY,
+    supplier_id   BIGINT REFERENCES suppliers(id) ON DELETE SET NULL,
+    description   TEXT,
+    purchase_date DATE,
+    total_amount  NUMERIC(12,2) DEFAULT 0,
+    installments  INT DEFAULT 1,
+    notes         TEXT,
+    created_at    TIMESTAMPTZ DEFAULT now()
+  );
+
+  CREATE TABLE IF NOT EXISTS commitment_installments (
+    id            BIGSERIAL PRIMARY KEY,
+    commitment_id BIGINT NOT NULL REFERENCES commitments(id) ON DELETE CASCADE,
+    seq_no        INT NOT NULL,
+    due_date      DATE NOT NULL,
+    amount        NUMERIC(12,2) DEFAULT 0,
+    paid          BOOLEAN DEFAULT false,
+    paid_date     DATE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ci_due ON commitment_installments(due_date);
+
+  ALTER TABLE commitments             DISABLE ROW LEVEL SECURITY;
+  ALTER TABLE commitment_installments DISABLE ROW LEVEL SECURITY;
+  GRANT ALL ON commitments             TO anon, authenticated;
+  GRANT ALL ON commitment_installments TO anon, authenticated;
+  GRANT USAGE, SELECT ON SEQUENCE commitments_id_seq             TO anon, authenticated;
+  GRANT USAGE, SELECT ON SEQUENCE commitment_installments_id_seq TO anon, authenticated;
+  ════════════════════════════════════════════════════════════════
+-->
+
+<!--
+  ════════════════════════════════════════════════════════════════
+  MIGRAÇÃO SUPABASE (v5) — já deve ter sido rodada:
+  ════════════════════════════════════════════════════════════════
+  -- Planejamento semanal de compras e caixa
+  CREATE TABLE IF NOT EXISTS purchase_plan (
+    id                 BIGSERIAL PRIMARY KEY,
+    week_start         DATE NOT NULL UNIQUE,
+    opening_balance    NUMERIC(12,2) DEFAULT 0,
+    receipts           NUMERIC(12,2) DEFAULT 0,
+    payments           NUMERIC(12,2) DEFAULT 0,
+    planned_purchases  NUMERIC(12,2) DEFAULT 0,
+    opening_commitment NUMERIC(12,2) DEFAULT 0,
+    notes              TEXT,
+    created_at         TIMESTAMPTZ DEFAULT now()
+  );
+
+  ALTER TABLE purchase_plan
+    ADD COLUMN IF NOT EXISTS opening_commitment NUMERIC(12,2) DEFAULT 0;
+
+  ALTER TABLE purchase_plan DISABLE ROW LEVEL SECURITY;
+  GRANT ALL ON purchase_plan TO anon, authenticated;
+  GRANT USAGE, SELECT ON SEQUENCE purchase_plan_id_seq TO anon, authenticated;
+  ════════════════════════════════════════════════════════════════
+-->
+
+<!--
+  ════════════════════════════════════════════════════════════════
+  MIGRAÇÃO SUPABASE (v4) — já deve ter sido rodada:
+  ════════════════════════════════════════════════════════════════
   CREATE TABLE IF NOT EXISTS units (
     id BIGSERIAL PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
@@ -185,8 +279,6 @@ input[readonly]{background:#F8FAFC;cursor:default;color:var(--primary-d);font-we
     ('Lâmina'),('Tubo'),('Tira'),('Par')
   ON CONFLICT (name) DO NOTHING;
 
-  -- Campos de referência de sub-unidade (não afetam contagem nem CMV —
-  -- servem só para saber o custo individual de insumo por exame)
   ALTER TABLE products
     ADD COLUMN IF NOT EXISTS sub_unit_label TEXT,
     ADD COLUMN IF NOT EXISTS sub_unit_qty NUMERIC;
@@ -233,6 +325,9 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
     <div class="nav-item" id="nav-contagem" onclick="go('contagem')"><span class="ni">📋</span>Contagem</div>
     <div class="nav-item" id="nav-compras" onclick="go('compras')"><span class="ni">🛒</span>Compras</div>
     <div class="nav-item" id="nav-cmv" onclick="go('cmv')"><span class="ni">📈</span>CMV</div>
+    <div class="nav-lbl">Financeiro</div>
+    <div class="nav-item" id="nav-planejamento" onclick="go('planejamento')"><span class="ni">🗓️</span>Planejamento Semanal</div>
+    <div class="nav-item" id="nav-parcelamentos" onclick="go('parcelamentos')"><span class="ni">💳</span>Caixa e Compras<span class="nb" id="cc-badge">0</span></div>
     <div class="nav-lbl">Cadastros</div>
     <div class="nav-item" id="nav-produtos" onclick="go('produtos')"><span class="ni">📦</span>Produtos</div>
     <div class="nav-item" id="nav-fornecedores" onclick="go('fornecedores')"><span class="ni">🏭</span>Fornecedores</div>
@@ -316,6 +411,140 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
         <div class="tbl-wrap">
           <table><thead><tr><th>Data</th><th>Produto</th><th>Fornecedor</th><th>Qtd Comprada</th><th>Custo/Unid. Compra</th><th>Custo/Unid. Estoque</th><th>Total</th><th>Período</th><th></th></tr></thead>
           <tbody id="compras-tbody"></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- PLANEJAMENTO DE COMPRAS -->
+    <section class="section" id="section-planejamento">
+      <div class="alert alert-info">
+        <span>🗓️</span>
+        <span>Planejamento semanal de caixa para compras. Preencha o <strong>saldo inicial</strong> da semana, os <strong>recebimentos</strong> previstos,
+        os <strong>pagamentos</strong> que pretende fazer e quanto pretende <strong>comprar</strong>.
+        O saldo final e o compromisso em aberto são calculados sozinhos — os valores salvam ao sair do campo.</span>
+      </div>
+
+      <div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">
+        <div class="stat-card" id="pp-card-saldo">
+          <div class="lbl">Saldo Projetado no Fim do Plano</div>
+          <div class="val" id="pp-stat-saldo">—</div>
+          <div class="sub" id="pp-stat-saldo-sub">Sem semanas cadastradas</div>
+        </div>
+        <div class="stat-card" id="pp-card-commit">
+          <div class="lbl">Compromisso em Aberto</div>
+          <div class="val" id="pp-stat-commit">—</div>
+          <div class="sub">Compras assumidas ainda não pagas</div>
+        </div>
+        <div class="stat-card" id="pp-card-neg">
+          <div class="lbl">Semanas com Saldo Negativo</div>
+          <div class="val" id="pp-stat-neg">0</div>
+          <div class="sub" id="pp-stat-neg-sub">Semanas que não fecham no caixa</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-hdr">
+          <span class="panel-ttl">Plano Semanal</span>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-outline" onclick="syncPlanOpenings()" title="Puxa o saldo final de cada semana para o saldo inicial da seguinte">🔗 Encadear Saldos</button>
+            <button class="btn btn-primary" onclick="addPlanWeek()">+ Nova Semana</button>
+          </div>
+        </div>
+        <div class="panel-body" style="padding:16px 20px">
+          <div class="pp-headband">
+            <div class="fg" style="max-width:260px">
+              <label>Parcelas já assumidas antes deste controle (R$)</label>
+              <input type="number" id="pp-open-commit" step="0.01" value="0" onchange="savePlanOpeningCommitment()">
+              <div class="conv-hint">Saldo devedor de compras parceladas na data da primeira semana. Deixe 0 se não souber.</div>
+            </div>
+          </div>
+        </div>
+        <div class="tbl-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Semana</th>
+                <th style="text-align:right">Saldo Inicial</th>
+                <th style="text-align:right">+ Recebimentos</th>
+                <th style="text-align:right">− Pagamentos</th>
+                <th style="text-align:right">= Saldo Final</th>
+                <th style="text-align:right">Compras Planejadas</th>
+                <th style="text-align:right">Compromisso em Aberto</th>
+                <th>Obs.</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="pp-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- CAIXA E COMPRAS — PARCELAMENTOS -->
+    <section class="section" id="section-parcelamentos">
+      <div class="stats-grid">
+        <div class="stat-card c-warn" id="cc-card-total">
+          <div class="lbl">Total Comprometido</div>
+          <div class="val" id="cc-stat-total">—</div>
+          <div class="sub" id="cc-stat-total-sub">Parcelas em aberto</div>
+        </div>
+        <div class="stat-card">
+          <div class="lbl">Comprometido no Mês Atual</div>
+          <div class="val" id="cc-stat-mes">—</div>
+          <div class="sub" id="cc-stat-mes-sub">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="lbl">Próximos 30 Dias</div>
+          <div class="val" id="cc-stat-30">—</div>
+          <div class="sub" id="cc-stat-30-sub">Parcelas a vencer</div>
+        </div>
+        <div class="stat-card c-ok" id="cc-card-atraso">
+          <div class="lbl">Parcelas Vencidas</div>
+          <div class="val" id="cc-stat-atraso">0</div>
+          <div class="sub" id="cc-stat-atraso-sub">Nenhuma em atraso</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-hdr">
+          <span class="panel-ttl">📆 Cronograma de Desembolso</span>
+          <div style="display:flex;gap:8px;align-items:center">
+            <select id="cc-year" onchange="renderCommitments()" style="width:auto;padding:6px 10px"></select>
+            <button class="btn btn-primary" onclick="openCommitmentModal()">+ Nova Compra Parcelada</button>
+          </div>
+        </div>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr>
+              <th>Mês</th>
+              <th style="text-align:right">Desembolso</th>
+              <th style="text-align:center">Parcelas</th>
+              <th style="text-align:right">Já Pago</th>
+              <th style="text-align:right">Em Aberto</th>
+            </tr></thead>
+            <tbody id="cc-months-tbody"></tbody>
+            <tfoot><tr style="background:#F8FAFC;border-top:2px solid var(--border)">
+              <td style="padding:11px 14px;font-weight:700">Total do Ano</td>
+              <td style="padding:11px 14px;text-align:right;font-weight:700;font-family:'DM Mono',monospace" id="cc-ft-total">—</td>
+              <td style="padding:11px 14px;text-align:center;font-weight:700" id="cc-ft-qtd">0</td>
+              <td style="padding:11px 14px;text-align:right;font-family:'DM Mono',monospace" id="cc-ft-pago">—</td>
+              <td style="padding:11px 14px;text-align:right;font-weight:700;font-family:'DM Mono',monospace;color:var(--warn)" id="cc-ft-aberto">—</td>
+            </tr></tfoot>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-hdr"><span class="panel-ttl">Compras Parceladas Cadastradas (<span id="cc-count">0</span>)</span></div>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr>
+              <th>Fornecedor / Descrição</th><th>Data da Compra</th>
+              <th style="text-align:right">Valor Total</th><th style="text-align:center">Parcelas</th>
+              <th style="text-align:right">Saldo Devedor</th><th>Progresso</th><th></th>
+            </tr></thead>
+            <tbody id="cc-list-tbody"></tbody>
+          </table>
         </div>
       </div>
     </section>
@@ -659,6 +888,58 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
   </div>
 </div>
 
+<!-- COMPRA PARCELADA -->
+<div class="mo" id="m-commit">
+  <div class="modal" style="max-width:700px">
+    <div class="modal-hdr">
+      <div><h3>Nova Compra Parcelada</h3><div class="msub">As parcelas são geradas automaticamente — você pode ajustar cada data e valor antes de salvar</div></div>
+      <button class="modal-x" onclick="closeM('m-commit')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="fr">
+        <div class="fg"><label>Fornecedor</label><select id="cm-supplier"><option value="">— Selecione —</option></select></div>
+        <div class="fg"><label>Descrição</label><input type="text" id="cm-desc" placeholder="Ex: Reagentes bioquímicos"></div>
+      </div>
+      <div class="fr3">
+        <div class="fg"><label>Data da Compra *</label><input type="date" id="cm-date"></div>
+        <div class="fg"><label>Valor Total (R$) *</label><input type="number" id="cm-total" min="0" step="0.01" value="0" oninput="buildInstallmentPreview()"></div>
+        <div class="fg"><label>Nº de Parcelas *</label><input type="number" id="cm-n" min="1" step="1" value="1" oninput="buildInstallmentPreview()"></div>
+      </div>
+      <div class="fr">
+        <div class="fg"><label>1º Vencimento *</label><input type="date" id="cm-first" onchange="buildInstallmentPreview()"></div>
+        <div class="fg"><label>Intervalo entre Parcelas</label>
+          <select id="cm-interval" onchange="buildInstallmentPreview()">
+            <option value="month">Mensal (30/60/90...)</option>
+            <option value="15">Quinzenal</option>
+            <option value="7">Semanal</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+      <div class="uom-section-label">📅 Parcelas Geradas</div>
+      <div class="conv-hint" style="margin-bottom:10px">Ajuste livremente as datas e os valores. A diferença de arredondamento vai para a última parcela.</div>
+      <div class="cc-prev-scroll">
+        <table>
+          <thead><tr><th style="width:60px">Nº</th><th>Vencimento</th><th style="text-align:right">Valor (R$)</th></tr></thead>
+          <tbody id="cm-prev-tbody"></tbody>
+        </table>
+      </div>
+      <div class="cc-total-chk">
+        <span class="text-muted">Soma das parcelas:</span>
+        <strong class="mono" id="cm-prev-sum">R$ 0,00</strong>
+        <span id="cm-prev-flag"></span>
+      </div>
+
+      <div class="fg" style="margin-top:14px"><label>Observações</label><input type="text" id="cm-notes" placeholder="Opcional"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-outline" onclick="closeM('m-commit')">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveCommitment()">Salvar Compra</button>
+    </div>
+  </div>
+</div>
+
 <!-- EDIÇÃO RÁPIDA UOM -->
 <div class="mo" id="m-quickedit">
   <div class="modal modal-xl">
@@ -711,7 +992,7 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // ─── STATE ────────────────────────────────────────────────────
-let S = { products:[], suppliers:[], periods:[], counts:[], purchases:[], units:[] };
+let S = { products:[], suppliers:[], periods:[], counts:[], purchases:[], units:[], plan:[], commits:[], installments:[] };
 let prodCatFilter = '';
 
 // ─── LOADING & TOAST ──────────────────────────────────────────
@@ -728,7 +1009,7 @@ function toast(msg, type='ok'){
 async function loadAll(){
   setLoading(true);
   try {
-    await Promise.all([loadSuppliers(), loadProducts(), loadPeriods(), loadCounts(), loadPurchases(), loadUnits()]);
+    await Promise.all([loadSuppliers(), loadProducts(), loadPeriods(), loadCounts(), loadPurchases(), loadUnits(), loadPlan(), loadCommitments()]);
     renderAll();
   } catch(e) {
     console.error(e);
@@ -828,6 +1109,41 @@ async function loadPurchases(){
   }));
 }
 
+// Planejamento semanal de compras — tabela purchase_plan
+async function loadPlan(){
+  const {data,error} = await sb.from('purchase_plan').select('*').order('week_start',{ascending:true});
+  if(error){ S.plan=[]; return; } // tabela pode não existir ainda — não quebra o sistema
+  S.plan = data.map(w => ({
+    id: w.id,
+    week: w.week_start,
+    opening:  parseFloat(w.opening_balance)    || 0,
+    receipts: parseFloat(w.receipts)           || 0,
+    payments: parseFloat(w.payments)           || 0,
+    purchases:parseFloat(w.planned_purchases)  || 0,
+    openingCommitment: parseFloat(w.opening_commitment) || 0,
+    notes: w.notes || ''
+  }));
+}
+
+// Compras parceladas + cronograma de parcelas
+async function loadCommitments(){
+  const [c, i] = await Promise.all([
+    sb.from('commitments').select('*').order('purchase_date',{ascending:false}),
+    sb.from('commitment_installments').select('*').order('due_date',{ascending:true})
+  ]);
+  if(c.error || i.error){ S.commits=[]; S.installments=[]; return; } // tabelas podem não existir ainda
+  S.commits = c.data.map(x=>({
+    id:x.id, suppId:x.supplier_id, desc:x.description||'',
+    date:x.purchase_date, total:parseFloat(x.total_amount)||0,
+    n:x.installments||1, notes:x.notes||''
+  }));
+  S.installments = i.data.map(x=>({
+    id:x.id, commitId:x.commitment_id, seq:x.seq_no,
+    due:x.due_date, amount:parseFloat(x.amount)||0,
+    paid:!!x.paid, paidDate:x.paid_date
+  }));
+}
+
 // ─── REAL-TIME ────────────────────────────────────────────────
 function startRealtime(){
   sb.channel('petlab-sync')
@@ -843,12 +1159,17 @@ function startRealtime(){
 function renderAll(){
   renderProducts(); renderSuppliers(); renderPeriods();
   renderCounts(); renderPurchases(); renderDashboard(); updateAlertBadge();
+  renderCommitments(); updateCommitBadge();
+  // Não redesenha o plano se a pessoa está digitando dentro dele (evita perder o foco)
+  if(!document.activeElement || !document.activeElement.closest || !document.activeElement.closest('#pp-tbody')){
+    renderPlan();
+  }
 }
 
 // ─── NAVIGATION ───────────────────────────────────────────────
 const PT = {
   dashboard:'Dashboard',periodos:'Períodos',contagem:'Contagem de Estoque',
-  compras:'Compras',cmv:'CMV — Custo das Mercadorias Vendidas',
+  compras:'Compras',planejamento:'Planejamento Semanal de Caixa',parcelamentos:'Caixa e Compras — Cronograma de Desembolso',cmv:'CMV — Custo das Mercadorias Vendidas',
   produtos:'Produtos',fornecedores:'Fornecedores',unidades:'Unidades',alertas:'Alertas de Estoque'
 };
 function go(page){
@@ -861,6 +1182,8 @@ function go(page){
     periodos:'<button class="btn btn-primary" onclick="openPeriodModal()">+ Novo Período</button>',
     contagem:'<button class="btn btn-primary" onclick="openCountModal()">+ Nova Contagem</button>',
     compras:'<button class="btn btn-primary" onclick="openPurchaseModal()">+ Registrar Compra</button>',
+    planejamento:'<button class="btn btn-primary" onclick="addPlanWeek()">+ Nova Semana</button>',
+    parcelamentos:'<button class="btn btn-primary" onclick="openCommitmentModal()">+ Nova Compra Parcelada</button>',
     produtos:'<button class="btn btn-primary" onclick="openProductModal()">+ Novo Produto</button>',
     fornecedores:'<button class="btn btn-primary" onclick="openSupplierModal()">+ Novo Fornecedor</button>'
   };
@@ -869,6 +1192,8 @@ function go(page){
   if(page==='alertas') renderAlerts();
   if(page==='dashboard') renderDashboard();
   if(page==='unidades') renderUnits();
+  if(page==='planejamento') renderPlan();
+  if(page==='parcelamentos') renderCommitments();
 }
 
 // ─── DASHBOARD ────────────────────────────────────────────────
@@ -912,6 +1237,513 @@ function renderDashboard(){
         <span class="badge ${p.status==='aberto'?'b-ok':'b-gray'}">${p.status==='aberto'?'Ativo':'Fechado'}</span>
       </div>`).join('');
   updateAlertBadge();
+}
+
+// ─── PLANEJAMENTO DE COMPRAS ──────────────────────────────────
+// Regras:
+//   Saldo Final          = Saldo Inicial + Recebimentos − Pagamentos
+//   Compromisso em Aberto = Compromisso anterior + Compras Planejadas − Pagamentos
+// Compras planejadas NÃO entram no saldo — elas são compromisso assumido, não desembolso.
+// O desembolso é o campo Pagamentos, digitado pela Luma.
+
+function computePlan(){
+  let commit = S.plan.length ? S.plan[0].openingCommitment : 0;
+  let prevFinal = null;
+  return S.plan.map((w, idx) => {
+    const final = w.opening + w.receipts - w.payments;
+    const delta = w.purchases - w.payments;
+    commit = commit + delta;
+    const div = (idx > 0 && prevFinal !== null) ? (w.opening - prevFinal) : 0;
+    const divShow = idx > 0 && Math.abs(div) >= 0.01;
+    prevFinal = final;
+    return { ...w, final, commit, delta, div, divShow };
+  });
+}
+
+function renderPlan(){
+  const tb = document.getElementById('pp-tbody');
+  if(!tb) return;
+  const rows = computePlan();
+
+  // Campo de compromisso inicial vive na primeira semana
+  const oc = document.getElementById('pp-open-commit');
+  if(oc){
+    oc.value = S.plan.length ? S.plan[0].openingCommitment : 0;
+    oc.disabled = !S.plan.length;
+  }
+
+  if(!rows.length){
+    tb.innerHTML = `<tr><td colspan="9"><div class="empty">
+      <div class="ei">🗓️</div>
+      <h3>Nenhuma semana no plano</h3>
+      <p>Adicione a primeira semana e preencha o saldo em conta para começar.</p>
+      <button class="btn btn-primary" style="margin-top:14px" onclick="addPlanWeek()">+ Nova Semana</button>
+    </div></td></tr>`;
+    renderPlanStats(rows);
+    return;
+  }
+
+  const curWeek = mondayOf(today());
+  tb.innerHTML = rows.map(w => {
+    const isNow = (w.week === curWeek);
+    const deltaIco = w.delta > 0
+      ? `<span class="pp-delta text-danger">▲</span>`
+      : (w.delta < 0 ? `<span class="pp-delta text-ok">▼</span>` : '');
+    return `<tr class="${isNow?'pp-now':''}">
+      <td>
+        <div class="pp-week-lbl">${weekLabel(w.week)}${isNow?' <span class="badge b-ok" style="margin-left:4px">Semana atual</span>':''}</div>
+        <div class="pp-week-sub">Início ${fmtDate(w.week)}</div>
+      </td>
+      <td style="text-align:right">
+        <input type="number" step="0.01" class="pp-in" id="pp-ob-${w.id}" value="${w.opening}" onchange="savePlanRow(${w.id})">
+        <div class="pp-div" id="pp-div-${w.id}"></div>
+      </td>
+      <td style="text-align:right"><input type="number" step="0.01" class="pp-in" id="pp-rc-${w.id}" value="${w.receipts}" onchange="savePlanRow(${w.id})"></td>
+      <td style="text-align:right">
+        <input type="number" step="0.01" class="pp-in" id="pp-pg-${w.id}" value="${w.payments}" onchange="savePlanRow(${w.id})">
+        <div class="pp-due" id="pp-due-${w.id}"></div>
+      </td>
+      <td style="text-align:right"><span class="pp-calc" id="pp-final-${w.id}">—</span></td>
+      <td style="text-align:right"><input type="number" step="0.01" class="pp-in" id="pp-cp-${w.id}" value="${w.purchases}" onchange="savePlanRow(${w.id})"></td>
+      <td style="text-align:right"><span class="pp-calc text-muted" id="pp-commit-${w.id}">—</span>${deltaIco}</td>
+      <td><input type="text" class="pp-in-notes" id="pp-nt-${w.id}" value="${(w.notes||'').replace(/"/g,'&quot;')}" placeholder="Ex: Kovalent 3x" onchange="savePlanRow(${w.id})"></td>
+      <td><button class="btn btn-sm btn-outline" style="color:var(--danger)" onclick="deletePlanWeek(${w.id})">✕</button></td>
+    </tr>`;
+  }).join('');
+
+  refreshPlanCalc();
+}
+
+// Atualiza apenas as células calculadas — não toca nos inputs, então não rouba o foco
+function refreshPlanCalc(){
+  const rows = computePlan();
+  rows.forEach(w => {
+    const f = document.getElementById(`pp-final-${w.id}`);
+    if(f){
+      f.textContent = R(w.final);
+      f.className = 'pp-calc ' + (w.final < 0 ? 'text-danger' : 'text-ok');
+    }
+    const c = document.getElementById(`pp-commit-${w.id}`);
+    if(c){
+      c.textContent = R(w.commit);
+      c.className = 'pp-calc ' + (w.commit > 0 ? 'text-muted' : 'text-ok');
+    }
+    const d = document.getElementById(`pp-div-${w.id}`);
+    if(d){
+      d.textContent = w.divShow
+        ? `⚠ ${w.div > 0 ? '+' : '−'}${R(Math.abs(w.div))} vs. projetado`
+        : '';
+    }
+    // Parcelas em aberto que vencem dentro da semana — vem da aba Caixa e Compras
+    const due = document.getElementById(`pp-due-${w.id}`);
+    if(due){
+      const list = (typeof instInRange === 'function')
+        ? instInRange(w.week, addDays(w.week, 6), true) : [];
+      const tot = list.reduce((s, x) => s + x.amount, 0);
+      if(!list.length){
+        due.textContent = ''; due.onclick = null; due.title = '';
+      } else {
+        const bate = Math.abs(tot - w.payments) < 0.01;
+        due.innerHTML = `${bate ? '✓' : '⇣'} Parcelas: ${R(tot)}`;
+        due.style.color = bate ? 'var(--ok)' : 'var(--indigo)';
+        due.title = bate ? 'O pagamento digitado bate com as parcelas da semana'
+                         : 'Clique para usar este valor no campo Pagamentos';
+        due.onclick = () => {
+          const el = document.getElementById(`pp-pg-${w.id}`);
+          if(el){ el.value = tot; savePlanRow(w.id); }
+        };
+      }
+    }
+  });
+  renderPlanStats(rows);
+}
+
+function renderPlanStats(rows){
+  const saldoEl  = document.getElementById('pp-stat-saldo');
+  const commitEl = document.getElementById('pp-stat-commit');
+  const negEl    = document.getElementById('pp-stat-neg');
+  if(!saldoEl) return;
+
+  if(!rows.length){
+    saldoEl.textContent = '—';
+    document.getElementById('pp-stat-saldo-sub').textContent = 'Sem semanas cadastradas';
+    commitEl.textContent = '—';
+    negEl.textContent = '0';
+    document.getElementById('pp-card-saldo').className = 'stat-card';
+    document.getElementById('pp-card-neg').className = 'stat-card';
+    return;
+  }
+
+  const last = rows[rows.length-1];
+  const negs = rows.filter(w => w.final < 0);
+
+  saldoEl.textContent = R(last.final);
+  document.getElementById('pp-stat-saldo-sub').textContent = 'Semana de ' + fmtDate(last.week);
+  document.getElementById('pp-card-saldo').className = 'stat-card ' + (last.final < 0 ? 'c-danger' : 'c-ok');
+
+  commitEl.textContent = R(last.commit);
+
+  negEl.textContent = negs.length;
+  document.getElementById('pp-card-neg').className = 'stat-card ' + (negs.length > 0 ? 'c-danger' : 'c-ok');
+  document.getElementById('pp-stat-neg-sub').textContent = negs.length > 0
+    ? 'A primeira é ' + weekLabel(negs[0].week)
+    : 'Todas as semanas fecham positivas';
+}
+
+async function savePlanRow(id){
+  const num = k => parseFloat(document.getElementById(`pp-${k}-${id}`)?.value) || 0;
+  const w = S.plan.find(x => x.id === id);
+  if(!w) return;
+  w.opening   = num('ob');
+  w.receipts  = num('rc');
+  w.payments  = num('pg');
+  w.purchases = num('cp');
+  w.notes     = document.getElementById(`pp-nt-${id}`)?.value || '';
+  refreshPlanCalc(); // recalcula a cascata na hora, sem redesenhar a tabela
+
+  const {error} = await sb.from('purchase_plan').update({
+    opening_balance:   w.opening,
+    receipts:          w.receipts,
+    payments:          w.payments,
+    planned_purchases: w.purchases,
+    notes:             w.notes || null
+  }).eq('id', id);
+  if(error) toast('Erro ao salvar a semana: ' + error.message, 'err');
+}
+
+async function savePlanOpeningCommitment(){
+  if(!S.plan.length) return;
+  const val = parseFloat(document.getElementById('pp-open-commit').value) || 0;
+  S.plan[0].openingCommitment = val;
+  refreshPlanCalc();
+  const {error} = await sb.from('purchase_plan').update({opening_commitment: val}).eq('id', S.plan[0].id);
+  if(error) toast('Erro ao salvar: ' + error.message, 'err');
+}
+
+async function addPlanWeek(){
+  const rows = computePlan();
+  const nextWeek = S.plan.length ? addDays(S.plan[S.plan.length-1].week, 7) : mondayOf(today());
+  const opening  = rows.length ? rows[rows.length-1].final : 0;
+  setLoading(true);
+  const {error} = await sb.from('purchase_plan').insert({
+    week_start: nextWeek,
+    opening_balance: opening,
+    receipts: 0, payments: 0, planned_purchases: 0
+  });
+  if(error){
+    setLoading(false);
+    alert('Erro ao criar a semana. Se for a primeira vez, confirme se a tabela "purchase_plan" foi criada no Supabase (veja o comentário SQL no topo do arquivo).\n\n' + error.message);
+    return;
+  }
+  toast('Semana adicionada!');
+  await loadPlan(); renderPlan(); setLoading(false);
+}
+
+async function deletePlanWeek(id){
+  const w = S.plan.find(x => x.id === id);
+  if(!w) return;
+  if(!confirm(`Excluir a semana ${weekLabel(w.week)} do plano?`)) return;
+  setLoading(true);
+  await sb.from('purchase_plan').delete().eq('id', id);
+  toast('Semana excluída.');
+  await loadPlan(); renderPlan(); setLoading(false);
+}
+
+// Puxa o saldo final de cada semana para o saldo inicial da seguinte, em bloco.
+// Útil depois de corrigir um valor no meio do plano.
+async function syncPlanOpenings(){
+  if(S.plan.length < 2){ toast('Nada a encadear — o plano tem menos de duas semanas.', 'err'); return; }
+  if(!confirm('Sobrescrever o saldo inicial de todas as semanas com o saldo final da semana anterior?\n\nA primeira semana não é alterada.')) return;
+  setLoading(true);
+  try{
+    let prevFinal = S.plan[0].opening + S.plan[0].receipts - S.plan[0].payments;
+    const updates = [];
+    for(let i = 1; i < S.plan.length; i++){
+      S.plan[i].opening = prevFinal;
+      updates.push(sb.from('purchase_plan').update({opening_balance: prevFinal}).eq('id', S.plan[i].id));
+      prevFinal = S.plan[i].opening + S.plan[i].receipts - S.plan[i].payments;
+    }
+    await Promise.all(updates);
+    toast('Saldos encadeados!');
+    await loadPlan(); renderPlan();
+  } catch(e){ alert('Erro: ' + e.message); }
+  finally{ setLoading(false); }
+}
+
+
+// ─── CAIXA E COMPRAS — COMPRAS PARCELADAS ─────────────────────
+// Uma compra parcelada gera N parcelas com data e valor próprios.
+// "Comprometido" = soma das parcelas ainda NÃO pagas.
+// Este módulo é independente do estoque: ele controla dinheiro, não quantidade.
+
+const MESES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
+               'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+
+// ── Cadastro ──
+function openCommitmentModal(){
+  document.getElementById('cm-supplier').innerHTML='<option value="">— Selecione —</option>'+
+    S.suppliers.map(x=>`<option value="${x.id}">${x.name}</option>`).join('');
+  document.getElementById('cm-desc').value='';
+  document.getElementById('cm-date').value=today();
+  document.getElementById('cm-total').value=0;
+  document.getElementById('cm-n').value=1;
+  document.getElementById('cm-first').value=addDays(today(),30);
+  document.getElementById('cm-interval').value='month';
+  document.getElementById('cm-notes').value='';
+  buildInstallmentPreview();
+  openM('m-commit');
+}
+
+// Gera a prévia das parcelas — o resto de arredondamento vai para a última
+function buildInstallmentPreview(){
+  const total = parseFloat(document.getElementById('cm-total').value) || 0;
+  const n     = Math.max(1, parseInt(document.getElementById('cm-n').value) || 1);
+  const first = document.getElementById('cm-first').value || today();
+  const iv    = document.getElementById('cm-interval').value;
+
+  const base = Math.round((total / n) * 100) / 100;
+  const rows = [];
+  for(let k = 0; k < n; k++){
+    const due = (iv === 'month') ? addMonths(first, k) : addDays(first, parseInt(iv) * k);
+    const amt = (k === n - 1) ? Math.round((total - base * (n - 1)) * 100) / 100 : base;
+    rows.push({seq: k + 1, due, amt});
+  }
+  document.getElementById('cm-prev-tbody').innerHTML = rows.map(r=>`<tr>
+    <td class="fw6">${r.seq}/${n}</td>
+    <td><input type="date" class="cc-in-date" id="cm-d-${r.seq}" value="${r.due}" onchange="sumInstallmentPreview()"></td>
+    <td style="text-align:right"><input type="number" step="0.01" class="cc-in-amt" id="cm-v-${r.seq}" value="${r.amt}" oninput="sumInstallmentPreview()"></td>
+  </tr>`).join('');
+  sumInstallmentPreview();
+}
+
+function sumInstallmentPreview(){
+  const n = Math.max(1, parseInt(document.getElementById('cm-n').value) || 1);
+  const total = parseFloat(document.getElementById('cm-total').value) || 0;
+  let sum = 0;
+  for(let k = 1; k <= n; k++) sum += parseFloat(document.getElementById(`cm-v-${k}`)?.value) || 0;
+  sum = Math.round(sum * 100) / 100;
+  document.getElementById('cm-prev-sum').textContent = R(sum);
+  const diff = Math.round((sum - total) * 100) / 100;
+  document.getElementById('cm-prev-flag').innerHTML = Math.abs(diff) < 0.01
+    ? '<span class="badge b-ok">confere</span>'
+    : `<span class="badge b-warn">${diff > 0 ? '+' : '−'}${R(Math.abs(diff))} vs. valor total</span>`;
+}
+
+async function saveCommitment(){
+  const suppId = parseInt(document.getElementById('cm-supplier').value) || null;
+  const desc   = document.getElementById('cm-desc').value.trim();
+  const date   = document.getElementById('cm-date').value;
+  const total  = parseFloat(document.getElementById('cm-total').value) || 0;
+  const n      = Math.max(1, parseInt(document.getElementById('cm-n').value) || 1);
+  const notes  = document.getElementById('cm-notes').value.trim();
+
+  if(!suppId && !desc){ alert('Informe o fornecedor ou uma descrição para identificar a compra.'); return; }
+  if(!date){ alert('Informe a data da compra.'); return; }
+  if(total <= 0){ alert('O valor total deve ser maior que zero.'); return; }
+
+  const parcelas = [];
+  for(let k = 1; k <= n; k++){
+    const due = document.getElementById(`cm-d-${k}`)?.value;
+    const amt = parseFloat(document.getElementById(`cm-v-${k}`)?.value) || 0;
+    if(!due){ alert(`Informe o vencimento da parcela ${k}.`); return; }
+    parcelas.push({seq_no: k, due_date: due, amount: amt});
+  }
+
+  setLoading(true);
+  try{
+    const {data, error} = await sb.from('commitments').insert({
+      supplier_id: suppId, description: desc || null, purchase_date: date,
+      total_amount: total, installments: n, notes: notes || null
+    }).select().single();
+    if(error) throw error;
+    const {error: e2} = await sb.from('commitment_installments')
+      .insert(parcelas.map(x => ({...x, commitment_id: data.id})));
+    if(e2) throw e2;
+    closeM('m-commit');
+    toast(`Compra registrada em ${n}x!`);
+    await loadCommitments(); renderCommitments(); updateCommitBadge();
+    if(document.getElementById('section-planejamento').classList.contains('active')) refreshPlanCalc();
+  } catch(e){
+    alert('Erro ao salvar. Se for a primeira vez, confirme se as tabelas "commitments" e "commitment_installments" foram criadas no Supabase (veja o comentário SQL no topo do arquivo).\n\n' + e.message);
+  } finally{ setLoading(false); }
+}
+
+async function deleteCommitment(id){
+  const c = S.commits.find(x => x.id === id);
+  if(!c) return;
+  if(!confirm(`Excluir esta compra e todas as ${c.n} parcelas?\n\n${commitLabel(c)} — ${R(c.total)}`)) return;
+  setLoading(true);
+  await sb.from('commitment_installments').delete().eq('commitment_id', id);
+  await sb.from('commitments').delete().eq('id', id);
+  toast('Compra excluída.');
+  await loadCommitments(); renderCommitments(); updateCommitBadge(); setLoading(false);
+}
+
+// ── Edição de parcela individual ──
+async function saveInstallment(id){
+  const inst = S.installments.find(x => x.id === id);
+  if(!inst) return;
+  const due = document.getElementById(`cc-d-${id}`)?.value || inst.due;
+  const amt = parseFloat(document.getElementById(`cc-v-${id}`)?.value) || 0;
+  inst.due = due; inst.amount = amt;
+  const {error} = await sb.from('commitment_installments').update({due_date: due, amount: amt}).eq('id', id);
+  if(error){ toast('Erro ao salvar a parcela: ' + error.message, 'err'); return; }
+  renderCommitments();
+  if(document.getElementById('section-planejamento').classList.contains('active')) refreshPlanCalc();
+}
+
+async function toggleInstallmentPaid(id, checked){
+  const inst = S.installments.find(x => x.id === id);
+  if(!inst) return;
+  inst.paid = checked; inst.paidDate = checked ? today() : null;
+  const {error} = await sb.from('commitment_installments')
+    .update({paid: checked, paid_date: checked ? today() : null}).eq('id', id);
+  if(error){ toast('Erro ao atualizar: ' + error.message, 'err'); return; }
+  renderCommitments(); updateCommitBadge();
+  if(document.getElementById('section-planejamento').classList.contains('active')) refreshPlanCalc();
+}
+
+// ── Helpers ──
+function commitLabel(c){
+  const sup = c.suppId ? S.suppliers.find(x => x.id === c.suppId) : null;
+  if(sup && c.desc) return `${sup.name} — ${c.desc}`;
+  return sup ? sup.name : (c.desc || 'Compra sem identificação');
+}
+function openInstallments(){ return S.installments.filter(i => !i.paid); }
+function instInRange(from, to, onlyOpen){
+  return S.installments.filter(i => i.due >= from && i.due <= to && (!onlyOpen || !i.paid));
+}
+function sumAmt(arr){ return arr.reduce((s, x) => s + x.amount, 0); }
+
+function updateCommitBadge(){
+  const t = today();
+  const n = S.installments.filter(i => !i.paid && i.due < t).length;
+  const b = document.getElementById('cc-badge');
+  if(!b) return;
+  b.textContent = n; b.classList.toggle('show', n > 0);
+}
+
+// ── Render ──
+function renderCommitments(){
+  const sel = document.getElementById('cc-year');
+  if(!sel) return;
+  const t = today();
+  const curYear = String(new Date().getFullYear());
+  const years = [...new Set(S.installments.map(i => i.due.slice(0, 4)))];
+  if(!years.includes(curYear)) years.push(curYear);
+  years.sort();
+  const chosen = (sel.value && years.includes(sel.value)) ? sel.value : curYear;
+  sel.innerHTML = years.map(y => `<option value="${y}"${y === chosen ? ' selected' : ''}>${y}</option>`).join('');
+
+  // ── Indicadores ──
+  const abertas   = openInstallments();
+  const mesIni    = t.slice(0, 8) + '01';
+  const mesFim    = lastDayOfMonth(t);
+  const doMes     = instInRange(mesIni, mesFim, true);
+  const prox30    = instInRange(t, addDays(t, 30), true);
+  const vencidas  = abertas.filter(i => i.due < t);
+
+  document.getElementById('cc-stat-total').textContent = R(sumAmt(abertas));
+  document.getElementById('cc-stat-total-sub').textContent = `${abertas.length} parcela${abertas.length !== 1 ? 's' : ''} em aberto`;
+  document.getElementById('cc-stat-mes').textContent = R(sumAmt(doMes));
+  document.getElementById('cc-stat-mes-sub').textContent = MESES[new Date(t + 'T12:00:00').getMonth()] + ' — ' + doMes.length + ' parcela(s)';
+  document.getElementById('cc-stat-30').textContent = R(sumAmt(prox30));
+  document.getElementById('cc-stat-30-sub').textContent = `${prox30.length} parcela(s) até ${fmtDate(addDays(t, 30))}`;
+  document.getElementById('cc-stat-atraso').textContent = vencidas.length;
+  document.getElementById('cc-card-atraso').className = 'stat-card ' + (vencidas.length > 0 ? 'c-danger' : 'c-ok');
+  document.getElementById('cc-stat-atraso-sub').textContent = vencidas.length > 0
+    ? R(sumAmt(vencidas)) + ' em atraso' : 'Nenhuma em atraso';
+
+  // ── Cronograma mensal ──
+  const tb = document.getElementById('cc-months-tbody');
+  let anoTot = 0, anoQtd = 0, anoPago = 0;
+  const linhas = [];
+  for(let m = 0; m < 12; m++){
+    const ini = `${chosen}-${String(m + 1).padStart(2, '0')}-01`;
+    const fim = lastDayOfMonth(ini);
+    const list = S.installments.filter(i => i.due >= ini && i.due <= fim)
+                               .sort((a, b) => a.due.localeCompare(b.due));
+    const tot   = sumAmt(list);
+    const pago  = sumAmt(list.filter(i => i.paid));
+    const aberto = tot - pago;
+    anoTot += tot; anoQtd += list.length; anoPago += pago;
+    const vazio = list.length === 0;
+
+    linhas.push(`<tr class="cc-month-row" onclick="toggleMonth(${m})">
+      <td><span class="cc-caret" id="cc-car-${m}">▶</span> ${MESES[m]}</td>
+      <td style="text-align:right" class="mono ${vazio ? 'text-muted' : 'text-primary fw7'}">${R(tot)}</td>
+      <td style="text-align:center">${list.length}</td>
+      <td style="text-align:right" class="mono text-muted">${R(pago)}</td>
+      <td class="mono ${aberto > 0 ? 'fw7' : 'text-muted'}" style="text-align:right${aberto > 0 ? ';color:var(--warn)' : ''}">${R(aberto)}</td>
+    </tr>`);
+
+    linhas.push(`<tr class="cc-detail" id="cc-det-${m}" style="display:none"><td colspan="5">
+      ${vazio ? '<div class="empty" style="padding:18px"><p>Nenhuma parcela neste mês</p></div>' : `
+      <table><thead><tr>
+        <th style="width:150px">Vencimento</th><th>Fornecedor / Descrição</th>
+        <th style="width:80px">Parcela</th><th style="width:140px;text-align:right">Valor</th>
+        <th style="width:110px">Status</th><th style="width:70px;text-align:center">Pago</th>
+      </tr></thead><tbody>
+      ${list.map(i => {
+        const c = S.commits.find(x => x.id === i.commitId);
+        const atrasada = !i.paid && i.due < t;
+        return `<tr>
+          <td><input type="date" class="cc-in-date" id="cc-d-${i.id}" value="${i.due}" onchange="saveInstallment(${i.id})"></td>
+          <td>${c ? commitLabel(c) : '—'}</td>
+          <td class="text-muted">${i.seq}/${c ? c.n : '?'}</td>
+          <td style="text-align:right"><input type="number" step="0.01" class="cc-in-amt" id="cc-v-${i.id}" value="${i.amount}" onchange="saveInstallment(${i.id})"></td>
+          <td>${i.paid
+              ? `<span class="badge b-ok">Pago${i.paidDate ? ' ' + fmtDate(i.paidDate) : ''}</span>`
+              : (atrasada ? '<span class="badge b-danger">Vencida</span>' : '<span class="badge b-warn">A vencer</span>')}</td>
+          <td style="text-align:center"><input type="checkbox" class="cc-chk" ${i.paid ? 'checked' : ''} onchange="toggleInstallmentPaid(${i.id}, this.checked)"></td>
+        </tr>`;
+      }).join('')}
+      </tbody></table>`}
+    </td></tr>`);
+  }
+  tb.innerHTML = linhas.join('');
+  document.getElementById('cc-ft-total').textContent  = R(anoTot);
+  document.getElementById('cc-ft-qtd').textContent    = anoQtd;
+  document.getElementById('cc-ft-pago').textContent   = R(anoPago);
+  document.getElementById('cc-ft-aberto').textContent = R(anoTot - anoPago);
+
+  // ── Lista de compras ──
+  const lb = document.getElementById('cc-list-tbody');
+  document.getElementById('cc-count').textContent = S.commits.length;
+  if(!S.commits.length){
+    lb.innerHTML = `<tr><td colspan="7"><div class="empty">
+      <div class="ei">💳</div><h3>Nenhuma compra parcelada</h3>
+      <p>Cadastre uma compra e o sistema monta o cronograma de parcelas.</p>
+      <button class="btn btn-primary" style="margin-top:14px" onclick="openCommitmentModal()">+ Nova Compra Parcelada</button>
+    </div></td></tr>`;
+    return;
+  }
+  lb.innerHTML = S.commits.map(c => {
+    const list  = S.installments.filter(i => i.commitId === c.id);
+    const pagas = list.filter(i => i.paid).length;
+    const saldo = sumAmt(list.filter(i => !i.paid));
+    const pct   = list.length ? Math.round((pagas / list.length) * 100) : 0;
+    return `<tr>
+      <td><strong>${commitLabel(c)}</strong>${c.notes ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">${c.notes}</div>` : ''}</td>
+      <td>${fmtDate(c.date)}</td>
+      <td style="text-align:right" class="mono fw6">${R(c.total)}</td>
+      <td style="text-align:center"><span class="badge b-indigo">${c.n}x</span></td>
+      <td style="text-align:right" class="mono ${saldo > 0 ? 'fw7' : 'text-muted'}">${R(saldo)}</td>
+      <td><div style="display:flex;align-items:center;gap:8px">
+        <div class="cc-bar"><span style="width:${pct}%"></span></div>
+        <span style="font-size:11px;color:var(--muted)">${pagas}/${list.length}</span>
+      </div></td>
+      <td><button class="btn btn-sm btn-outline" style="color:var(--danger)" onclick="deleteCommitment(${c.id})">✕</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function toggleMonth(m){
+  const row = document.getElementById('cc-det-' + m);
+  const car = document.getElementById('cc-car-' + m);
+  const open = row.style.display !== 'none';
+  row.style.display = open ? 'none' : 'table-row';
+  car.classList.toggle('open', !open);
 }
 
 // ─── PERIODS ──────────────────────────────────────────────────
@@ -1659,6 +2491,41 @@ function today(){ return new Date().toISOString().split('T')[0]; }
 function cost_per_stock(purchaseCost, convFactor){ return (convFactor && convFactor > 0) ? purchaseCost / convFactor : purchaseCost; }
 function openM(id){ document.getElementById(id).classList.add('open'); document.body.style.overflow='hidden'; }
 function closeM(id){ document.getElementById(id).classList.remove('open'); document.body.style.overflow=''; }
+
+// Utilitários de semana (segunda a domingo)
+function mondayOf(d){
+  const dt=new Date(d+'T12:00:00');
+  const dow=dt.getDay();               // 0=domingo, 1=segunda...
+  const diff=(dow===0? -6 : 1-dow);    // domingo pertence à semana que começou na segunda anterior
+  dt.setDate(dt.getDate()+diff);
+  return dt.toISOString().split('T')[0];
+}
+function addDays(d,n){
+  const dt=new Date(d+'T12:00:00');
+  dt.setDate(dt.getDate()+n);
+  return dt.toISOString().split('T')[0];
+}
+function fmtDayMonth(d){
+  const dt=new Date(d+'T12:00:00');
+  return String(dt.getDate()).padStart(2,'0')+'/'+String(dt.getMonth()+1).padStart(2,'0');
+}
+function weekLabel(d){ return fmtDayMonth(d)+' – '+fmtDayMonth(addDays(d,6)); }
+// Soma meses preservando o dia — se o mês destino não tiver o dia, usa o último dia dele
+function addMonths(d,n){
+  const dt=new Date(d+'T12:00:00');
+  const day=dt.getDate();
+  const alvo=new Date(dt.getFullYear(), dt.getMonth()+n, 1);
+  const ultimo=new Date(alvo.getFullYear(), alvo.getMonth()+1, 0).getDate();
+  alvo.setDate(Math.min(day, ultimo));
+  return isoOf(alvo);
+}
+function lastDayOfMonth(d){
+  const dt=new Date(d+'T12:00:00');
+  return isoOf(new Date(dt.getFullYear(), dt.getMonth()+1, 0));
+}
+function isoOf(dt){
+  return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0');
+}
 
 document.querySelectorAll('.mo').forEach(el=>{
   el.addEventListener('click', function(e){ if(e.target===this) closeM(this.id); });
