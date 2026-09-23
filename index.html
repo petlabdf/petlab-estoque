@@ -1809,11 +1809,48 @@ function renderPeriods(){
       <td>${fmtDate(p.start)}</td><td>${p.end?fmtDate(p.end):'—'}</td>
       <td><span class="badge ${p.status==='aberto'?'b-ok':'b-gray'}">${p.status==='aberto'?'Ativo':'Fechado'}</span></td>
       <td>${oc?`<span class="badge b-ok">✓ ${fmtDate(oc.date)}</span>`:'<span class="badge b-warn">Pendente</span>'}</td>
-      <td>${p.type==='implantacao'?'<span class="badge b-gray">N/A</span>':cc?`<span class="badge b-ok">✓ ${fmtDate(cc.date)}</span>`:'<span class="badge b-warn">Pendente</span>'}</td>
+      <td>${cc?`<span class="badge b-ok">✓ ${fmtDate(cc.date)}</span>`:(p.type==='implantacao'?'<span class="badge b-gray">N/A</span>':'<span class="badge b-warn">Pendente</span>')}</td>
       <td class="mono fw7">${cmv!==null?R(cmv):'—'}</td>
       <td>${acts}</td>
     </tr>`;
   }).join('');
+}
+
+// ─── VALIDAÇÕES COMPARTILHADAS (contagem + compra) ─────────────
+// Avisa (não bloqueia) quando a data informada está fora do intervalo do período selecionado.
+// Períodos 'implantacao' não têm end_date: nesse caso, só avisa se existir outro período
+// mensal/semanal cujo intervalo já contenha essa data (sinal de que a data pertence a ele).
+// Retorna true se deve continuar o salvamento, false se o usuário cancelou.
+function confirmDateWithinPeriod(period, date){
+  if(!period || !date) return true;
+  if(period.type !== 'implantacao'){
+    const antesDoInicio = period.start && date < period.start;
+    const depoisDoFim = period.end && date > period.end;
+    if(antesDoInicio || depoisDoFim){
+      return confirm('Atenção: a data informada não está dentro do intervalo do período selecionado. Deseja continuar mesmo assim?');
+    }
+    return true;
+  }
+  const outroPeriodoContemData = S.periods.some(p =>
+    p.id !== period.id && (p.type === 'mensal' || p.type === 'semanal') &&
+    p.start && p.end && date >= p.start && date <= p.end
+  );
+  if(outroPeriodoContemData){
+    return confirm('Atenção: a data informada não está dentro do intervalo do período selecionado. Deseja continuar mesmo assim?');
+  }
+  return true;
+}
+
+// Avisa (não bloqueia) quando o período já tem uma contagem diferente vinculada
+// no campo de abertura/fechamento que está prestes a ser sobrescrito.
+// Retorna true se deve continuar, false se o usuário cancelou a substituição.
+function confirmReplaceCountLink(period, jsField, newCountId){
+  const existing = period ? period[jsField] : null;
+  if(existing && existing !== newCountId){
+    const kind = jsField === 'closeCountId' ? 'fechamento' : 'abertura';
+    return confirm(`Este período já tem uma contagem de ${kind} registrada. Substituir?`);
+  }
+  return true;
 }
 
 // ─── STOCK COUNTS ─────────────────────────────────────────────
@@ -1905,12 +1942,40 @@ async function saveCount(){
   const editId=document.getElementById('cnt-edit-id').value;
   if(!periodId||isNaN(periodId)){alert('Selecione um período.');return;}
   if(!date){alert('Informe a data.');return;}
+
+  const targetPeriod=S.periods.find(x=>x.id===periodId);
+
+  // Validação 4: data fora do intervalo do período — avisa, não bloqueia
+  if(!confirmDateWithinPeriod(targetPeriod, date)) return;
+
+  const jsField=(type==='fechamento')?'closeCountId':'openCountId';
+  const dbField=(type==='fechamento')?'close_count_id':'open_count_id';
+  const editingCountId = editId ? parseInt(editId) : null;
+
+  // Validação 3: período já tem uma contagem DIFERENTE vinculada nesse campo — confirma antes de sobrescrever
+  if(!confirmReplaceCountLink(targetPeriod, jsField, editingCountId)) return;
+
   setLoading(true);
   try{
     let countId;
     if(editId){
-      // Edição: atualiza o registro e reinsere os itens
       countId=parseInt(editId);
+
+      // Correção 1: antes de aplicar as mudanças, limpa qualquer período (diferente do de
+      // destino) que ainda aponte pra essa contagem — evita períodos "presos" quando a
+      // contagem migra de período ao ser editada.
+      const oldPeriods = S.periods.filter(p =>
+        p.id !== periodId && (p.openCountId === countId || p.closeCountId === countId)
+      );
+      for(const op of oldPeriods){
+        const clearUpdates = {};
+        if(op.openCountId === countId) clearUpdates.open_count_id = null;
+        if(op.closeCountId === countId) clearUpdates.close_count_id = null;
+        const {error:eClear}=await sb.from('periods').update(clearUpdates).eq('id',op.id);
+        if(eClear) throw eClear;
+      }
+
+      // Edição: atualiza o registro e reinsere os itens
       const {error:e0}=await sb.from('stock_counts').update({period_id:periodId,type,date}).eq('id',countId);
       if(e0) throw e0;
       const {error:eDel}=await sb.from('count_items').delete().eq('count_id',countId);
@@ -1920,9 +1985,8 @@ async function saveCount(){
       const {data:cnt,error:e1}=await sb.from('stock_counts').insert({period_id:periodId,type,date}).select().single();
       if(e1) throw e1;
       countId=cnt.id;
-      const field=(type==='fechamento')?'close_count_id':'open_count_id';
-      await sb.from('periods').update({[field]:countId}).eq('id',periodId);
     }
+
     const items=S.products.filter(p=>p.active).map(p=>{
       const f=parseInt(document.getElementById('cf-'+p.id)?.value)||0; // pacotes/caixas fechados (unid. compra)
       const a=parseInt(document.getElementById('ca-'+p.id)?.value)||0; // solto (unid. estoque)
@@ -1932,6 +1996,13 @@ async function saveCount(){
     });
     const {error:e2}=await sb.from('count_items').insert(items);
     if(e2) throw e2;
+
+    // Correções 1 e 2: re-sincroniza o vínculo do período com a contagem — na criação
+    // e na edição, sempre igualando o campo (abertura/fechamento) ao countId atual — e
+    // verifica erro do update, que antes ficava silencioso.
+    const {error:eField}=await sb.from('periods').update({[dbField]:countId}).eq('id',periodId);
+    if(eField) throw eField;
+
     closeM('m-count');
     toast(editId?'Contagem atualizada!':'Contagem salva!');
     await loadAll();
@@ -2051,6 +2122,10 @@ async function savePurchase(){
   if(!prodId||isNaN(prodId)){alert('Selecione um produto.');return;}
   if(!date){alert('Informe a data.');return;}
   if(qty<=0){alert('Quantidade deve ser maior que zero.');return;}
+
+  // Validação 4: data fora do intervalo do período — avisa, não bloqueia
+  const purchasePeriod = S.periods.find(x=>x.id===periodId);
+  if(!confirmDateWithinPeriod(purchasePeriod, date)) return;
 
   const prod = S.products.find(x=>x.id===prodId);
   const convFactor = prod ? prod.convFactor : 1;
