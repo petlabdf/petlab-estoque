@@ -3,10 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PetLab — Controle de Estoque</title>
+<title>PetLab — Controle de Estoque v7</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{
@@ -179,6 +180,16 @@ input[readonly]{background:#F8FAFC;cursor:default;color:var(--primary-d);font-we
 .pp-due{font-size:9.5px;margin-top:3px;font-weight:600;line-height:1.3;cursor:pointer;color:var(--indigo)}
 .pp-due:hover{text-decoration:underline}
 
+/* ── v7: CONTAGEM COM VALIDADE, NOTA, REPOSIÇÃO ─────────────── */
+.cnt-exp-col{display:none}
+.show-exp .cnt-exp-col{display:table-cell}
+.nt-in{padding:6px 8px;font-size:12.5px}
+.rp-tag{font-size:10.5px;color:var(--muted);margin-top:2px}
+.rp-click{cursor:pointer;color:var(--indigo);font-weight:600}
+.rp-click:hover{text-decoration:underline}
+.ex-per{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px}
+.ex-per input{width:auto}
+
 /* ── CAIXA E COMPRAS (PARCELAMENTOS) ─────────────────────────── */
 .cc-month-row{cursor:pointer}
 .cc-month-row td{font-weight:600}
@@ -201,8 +212,82 @@ input[readonly]{background:#F8FAFC;cursor:default;color:var(--primary-d);font-we
 <body>
 
 <!--
+  ═══ COPIE O SQL ABAIXO (também está no arquivo migracao_v7.sql) ═══
+
+-- ════════════════════════════════════════════════════════════════
+-- PetLab — Controle de Estoque — MIGRAÇÃO v7
+-- Rodar UMA vez no SQL Editor do Supabase ANTES de abrir a v7.
+-- Só adiciona colunas/tabelas. Nada é renomeado ou apagado.
+-- ════════════════════════════════════════════════════════════════
+
+-- 1) Faturamento semanal opcional no período (F2)
+ALTER TABLE periods
+  ADD COLUMN IF NOT EXISTS revenue            NUMERIC(12,2),
+  ADD COLUMN IF NOT EXISTS outsourced_revenue NUMERIC(12,2);
+
+-- 2) Faturamento mensal (lançamento principal — F1/F2/F3/F4)
+CREATE TABLE IF NOT EXISTS monthly_revenue (
+  id                 BIGSERIAL PRIMARY KEY,
+  month              DATE NOT NULL UNIQUE,      -- sempre o dia 1 do mês
+  revenue            NUMERIC(12,2) DEFAULT 0,   -- faturamento bruto total
+  outsourced_revenue NUMERIC(12,2) DEFAULT 0,   -- quanto disso é de exames terceirizados
+  notes              TEXT,
+  created_at         TIMESTAMPTZ DEFAULT now()
+);
+
+-- 3) Compras: validade, lote, nota, frete, bonificação e vínculo com o parcelamento (C1, C2, D2, D3)
+ALTER TABLE purchases
+  ADD COLUMN IF NOT EXISTS expiry_date    DATE,
+  ADD COLUMN IF NOT EXISTS lot_code       TEXT,
+  ADD COLUMN IF NOT EXISTS invoice_number TEXT,
+  ADD COLUMN IF NOT EXISTS freight_alloc  NUMERIC(12,2) DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS is_bonus       BOOLEAN DEFAULT false,
+  ADD COLUMN IF NOT EXISTS commitment_id  BIGINT REFERENCES commitments(id) ON DELETE SET NULL;
+
+-- 4) Produtos: prazo de entrega e controle de validade (D3, D4)
+ALTER TABLE products
+  ADD COLUMN IF NOT EXISTS lead_time_days INT DEFAULT 7,
+  ADD COLUMN IF NOT EXISTS tracks_expiry  BOOLEAN DEFAULT false;
+UPDATE products SET tracks_expiry = true
+  WHERE cat IN ('Teste Rápido','Reagentes','Bioquímicos') AND (tracks_expiry IS NULL OR tracks_expiry = false);
+
+-- 5) Contagem: aceitar quantidades fracionadas (0,5 L) e validade na implantação
+ALTER TABLE count_items ALTER COLUMN qty_closed TYPE NUMERIC USING qty_closed::NUMERIC;
+ALTER TABLE count_items ALTER COLUMN qty_open   TYPE NUMERIC USING qty_open::NUMERIC;
+ALTER TABLE count_items ALTER COLUMN total      TYPE NUMERIC USING total::NUMERIC;
+ALTER TABLE count_items ADD COLUMN IF NOT EXISTS expiry_date DATE;
+ALTER TABLE purchases   ALTER COLUMN qty        TYPE NUMERIC USING qty::NUMERIC;
+
+-- 6) Perdas e baixas (vencido, quebra) — mostradas à parte do CMV (C3)
+CREATE TABLE IF NOT EXISTS stock_losses (
+  id            BIGSERIAL PRIMARY KEY,
+  period_id     BIGINT REFERENCES periods(id) ON DELETE SET NULL,
+  product_id    BIGINT REFERENCES products(id),
+  date          DATE NOT NULL,
+  qty           NUMERIC NOT NULL,             -- em unidade de estoque
+  reason        TEXT DEFAULT 'Vencido',
+  cost_snapshot NUMERIC DEFAULT 0,
+  notes         TEXT,
+  created_at    TIMESTAMPTZ DEFAULT now()
+);
+
+-- 7) Configurações (meta de CMV %)
+CREATE TABLE IF NOT EXISTS app_settings (
+  key   TEXT PRIMARY KEY,
+  value TEXT
+);
+
+ALTER TABLE monthly_revenue DISABLE ROW LEVEL SECURITY;
+ALTER TABLE stock_losses    DISABLE ROW LEVEL SECURITY;
+ALTER TABLE app_settings    DISABLE ROW LEVEL SECURITY;
+GRANT ALL ON monthly_revenue, stock_losses, app_settings TO anon, authenticated;
+GRANT USAGE, SELECT ON SEQUENCE monthly_revenue_id_seq TO anon, authenticated;
+GRANT USAGE, SELECT ON SEQUENCE stock_losses_id_seq    TO anon, authenticated;
+-->
+
+<!--
   ════════════════════════════════════════════════════════════════
-  MIGRAÇÃO SUPABASE — rodar no SQL Editor antes de usar esta v6:
+  MIGRAÇÃO SUPABASE (v6) — já deve ter sido rodada:
   ════════════════════════════════════════════════════════════════
   -- Compras parceladas e cronograma de desembolso
   CREATE TABLE IF NOT EXISTS commitments (
@@ -324,8 +409,10 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
     <div class="nav-item" id="nav-periodos" onclick="go('periodos')"><span class="ni">📅</span>Períodos</div>
     <div class="nav-item" id="nav-contagem" onclick="go('contagem')"><span class="ni">📋</span>Contagem</div>
     <div class="nav-item" id="nav-compras" onclick="go('compras')"><span class="ni">🛒</span>Compras</div>
+    <div class="nav-item" id="nav-perdas" onclick="go('perdas')"><span class="ni">🗑️</span>Perdas e Baixas</div>
     <div class="nav-item" id="nav-cmv" onclick="go('cmv')"><span class="ni">📈</span>CMV</div>
     <div class="nav-lbl">Financeiro</div>
+    <div class="nav-item" id="nav-reposicao" onclick="go('reposicao')"><span class="ni">🔄</span>Reposição e Validade<span class="nb" id="rep-badge">0</span></div>
     <div class="nav-item" id="nav-planejamento" onclick="go('planejamento')"><span class="ni">🗓️</span>Planejamento Semanal</div>
     <div class="nav-item" id="nav-parcelamentos" onclick="go('parcelamentos')"><span class="ni">💳</span>Caixa e Compras<span class="nb" id="cc-badge">0</span></div>
     <div class="nav-lbl">Cadastros</div>
@@ -339,7 +426,7 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
 <main class="main">
   <header class="topbar">
     <span class="topbar-title" id="page-title">Dashboard</span>
-    <div class="topbar-actions" id="page-actions"></div>
+    <div class="topbar-actions"><div id="page-actions" style="display:flex;gap:8px"></div><button class="btn btn-outline" onclick="openExportModal()" title="Extrair dados do sistema em Excel ou JSON">⬇ Exportar Dados</button></div>
   </header>
   <div class="content">
 
@@ -398,7 +485,7 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
       <div class="panel">
         <div class="panel-hdr"><span class="panel-ttl">Contagens de Estoque</span><button class="btn btn-primary" onclick="openCountModal()">+ Nova Contagem</button></div>
         <div class="tbl-wrap">
-          <table><thead><tr><th>Data</th><th>Período</th><th>Tipo</th><th>Itens &gt; 0</th><th>Valor Total</th><th>Ações</th></tr></thead>
+          <table><thead><tr><th>Data</th><th>Período</th><th>Uso (abre / fecha)</th><th>Itens &gt; 0</th><th>Valor Total</th><th>Ações</th></tr></thead>
           <tbody id="contagem-tbody"></tbody></table>
         </div>
       </div>
@@ -407,10 +494,28 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
     <!-- COMPRAS -->
     <section class="section" id="section-compras">
       <div class="panel">
-        <div class="panel-hdr"><span class="panel-ttl">Registro de Compras</span><button class="btn btn-primary" onclick="openPurchaseModal()">+ Registrar Compra</button></div>
+        <div class="panel-hdr"><span class="panel-ttl">Registro de Compras</span><button class="btn btn-primary" onclick="openNotaModal()">+ Registrar Nota de Compra</button></div>
+        <div class="alert alert-info" style="margin:14px 18px 0">
+          <span>💡</span><span>A data da compra é a <strong>data de recebimento</strong> (quando o material chegou na prateleira). O <strong>Total</strong> inclui o frete rateado da nota — é ele que entra no CMV.</span>
+        </div>
         <div class="tbl-wrap">
-          <table><thead><tr><th>Data</th><th>Produto</th><th>Fornecedor</th><th>Qtd Comprada</th><th>Custo/Unid. Compra</th><th>Custo/Unid. Estoque</th><th>Total</th><th>Período</th><th></th></tr></thead>
+          <table><thead><tr><th>Recebido em</th><th>Produto</th><th>Fornecedor</th><th>Qtd Comprada</th><th>Custo/Unid. Compra</th><th>Custo/Unid. Estoque</th><th>Frete</th><th>Total</th><th>Validade / Lote</th><th>Nota</th><th>Período</th><th></th></tr></thead>
           <tbody id="compras-tbody"></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- PERDAS E BAIXAS -->
+    <section class="section" id="section-perdas">
+      <div class="alert alert-info">
+        <span>🗑️</span><span>Registre aqui o que saiu do estoque <strong>sem ser usado em exame</strong> (vencido, quebrado, contaminado).
+        Não muda o CMV total — a contagem já captura a falta —, mas separa no CMV quanto foi <strong>perda</strong> e quanto foi <strong>consumo</strong>.</span>
+      </div>
+      <div class="panel">
+        <div class="panel-hdr"><span class="panel-ttl">Perdas Registradas</span><button class="btn btn-primary" onclick="openLossModal()">+ Registrar Perda</button></div>
+        <div class="tbl-wrap">
+          <table><thead><tr><th>Data</th><th>Produto</th><th style="text-align:right">Qtd</th><th>Motivo</th><th style="text-align:right">Valor</th><th>Período</th><th>Obs.</th><th></th></tr></thead>
+          <tbody id="perdas-tbody"></tbody></table>
         </div>
       </div>
     </section>
@@ -541,10 +646,44 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
             <thead><tr>
               <th>Fornecedor / Descrição</th><th>Data da Compra</th>
               <th style="text-align:right">Valor Total</th><th style="text-align:center">Parcelas</th>
-              <th style="text-align:right">Saldo Devedor</th><th>Progresso</th><th></th>
+              <th style="text-align:right">Saldo Devedor</th><th>Progresso</th><th title="Compara até quando o material da nota dura com a data da última parcela">Material dura até × Última parcela</th><th></th>
             </tr></thead>
             <tbody id="cc-list-tbody"></tbody>
           </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- REPOSIÇÃO E VALIDADE -->
+    <section class="section" id="section-reposicao">
+      <div class="alert alert-info">
+        <span>🔄</span><span>Calculado a partir das contagens e compras — <strong>não precisa lançar saídas</strong>. O consumo de cada semana sai dos lotes que vencem primeiro (PVPS).
+        <strong>Pedir até</strong> = data prevista em que o item acaba − prazo de entrega. A sugestão cobre o estoque mínimo + 4 semanas de consumo.</span>
+      </div>
+      <div class="stats-grid">
+        <div class="stat-card" id="rp-card-pedir"><div class="lbl">Pedir Esta Semana</div><div class="val" id="rp-stat-pedir">0</div><div class="sub" id="rp-stat-pedir-sub">—</div></div>
+        <div class="stat-card" id="rp-card-atraso"><div class="lbl">Pedidos Atrasados</div><div class="val" id="rp-stat-atraso">0</div><div class="sub">Já passou do "pedir até"</div></div>
+        <div class="stat-card" id="rp-card-risco"><div class="lbl">Risco de Perda por Validade</div><div class="val" id="rp-stat-risco">—</div><div class="sub" id="rp-stat-risco-sub">Vence antes de ser usado</div></div>
+        <div class="stat-card"><div class="lbl">Tempo Médio em Estoque</div><div class="val" id="rp-stat-dias">—</div><div class="sub">Dias entre entrada e saída do lote</div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-hdr"><span class="panel-ttl">📆 Próximas 8 Semanas — Parcelas × Reposição × Vencimentos</span></div>
+        <div class="tbl-wrap">
+          <table><thead><tr><th>Semana</th><th style="text-align:right">Parcelas a Pagar</th><th style="text-align:right">Reposição Sugerida</th><th>Itens a Pedir</th><th style="text-align:right">R$ Vencendo sem Uso</th><th style="text-align:right">Saldo do Plano</th><th>Situação</th></tr></thead>
+          <tbody id="rp-weeks-tbody"></tbody></table>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-hdr"><span class="panel-ttl">Reposição por Produto</span>
+          <div class="filter-bar" style="margin:0" id="rp-filters">
+            <button class="fpill active" onclick="setRepFilter('acao',this)">Precisam de ação</button>
+            <button class="fpill" onclick="setRepFilter('validade',this)">Com validade</button>
+            <button class="fpill" onclick="setRepFilter('',this)">Todos</button>
+          </div>
+        </div>
+        <div class="tbl-wrap">
+          <table><thead><tr><th>Produto</th><th style="text-align:right">Estoque</th><th style="text-align:right">Consumo/Sem.</th><th style="text-align:right">Cobertura</th><th>Acaba em</th><th>Pedir até</th><th>Sugestão</th><th>Validade Próxima</th><th style="text-align:right">Risco Perda</th><th style="text-align:right">Tempo em Estoque</th><th></th></tr></thead>
+          <tbody id="rp-tbody"></tbody></table>
         </div>
       </div>
     </section>
@@ -562,9 +701,27 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
         </div>
       </div>
       <div class="panel">
-        <div class="panel-hdr"><span class="panel-ttl">Histórico de CMV</span></div>
+        <div class="panel-hdr">
+          <span class="panel-ttl">💰 Faturamento e CMV % Mensal</span>
+          <div style="display:flex;gap:10px;align-items:center">
+            <label style="margin:0;white-space:nowrap">Meta CMV %</label>
+            <input type="number" id="cmv-goal" step="0.1" min="0" style="width:80px;padding:6px 8px" onchange="saveCMVGoal()" placeholder="Ex: 12">
+            <select id="rev-year" onchange="renderMonthlyRevenue()" style="width:auto;padding:6px 10px"></select>
+          </div>
+        </div>
+        <div class="alert alert-info" style="margin:14px 18px 0">
+          <span>💡</span><span>Lance o <strong>faturamento bruto</strong> do mês (valor faturado) e quanto dele é de <strong>exames terceirizados</strong>.
+          O CMV do mês soma os períodos que <strong>terminam</strong> no mês. Valores salvam ao sair do campo.</span>
+        </div>
         <div class="tbl-wrap">
-          <table><thead><tr><th>Período</th><th>Tipo</th><th>Est. Inicial</th><th>Compras</th><th>Est. Final</th><th>CMV</th></tr></thead>
+          <table><thead><tr><th>Mês</th><th style="text-align:right">Faturamento Bruto</th><th style="text-align:right">Terceirizados</th><th style="text-align:center">Períodos</th><th style="text-align:right">CMV</th><th style="text-align:right">Perdas</th><th style="text-align:right">CMV %</th><th style="text-align:right">CMV % s/ internos</th></tr></thead>
+          <tbody id="rev-tbody"></tbody></table>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-hdr"><span class="panel-ttl">Histórico de CMV por Período</span></div>
+        <div class="tbl-wrap">
+          <table><thead><tr><th>Período</th><th>Tipo</th><th>Est. Inicial</th><th>Compras</th><th>Est. Final</th><th>CMV</th><th>Perdas</th><th>Faturamento</th><th>CMV %</th><th>Média 4 Períodos</th></tr></thead>
           <tbody id="cmv-hist"></tbody></table>
         </div>
       </div>
@@ -635,6 +792,13 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
           <tbody id="alert-tbody"></tbody></table>
         </div>
       </div>
+      <div class="panel">
+        <div class="panel-hdr"><span class="panel-ttl">⏳ Validade — Vencidos e Vencendo em até 60 Dias</span><button class="btn btn-sm btn-outline" onclick="go('reposicao')">Ver reposição</button></div>
+        <div class="tbl-wrap">
+          <table><thead><tr><th>Produto</th><th>Lote / Origem</th><th>Validade</th><th style="text-align:right">Saldo do Lote</th><th style="text-align:right">Deve Sobrar no Vencimento</th><th style="text-align:right">Valor em Risco</th><th>Situação</th></tr></thead>
+          <tbody id="exp-tbody"></tbody></table>
+        </div>
+      </div>
     </section>
   </div>
 </main>
@@ -659,12 +823,13 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
         </select>
       </div>
       <div class="fr" id="p-dates">
-        <div class="fg" style="margin:0"><label>Início *</label><input type="date" id="p-start"></div>
+        <div class="fg" style="margin:0"><label>Início *</label><input type="date" id="p-start" onchange="togglePeriodForm()"></div>
         <div class="fg" style="margin:0" id="p-end-grp"><label>Fim *</label><input type="date" id="p-end"></div>
       </div>
       <div class="alert alert-warn" id="p-imp-note" style="display:none;margin-top:12px">
-        <span>⚠️</span><span>Implantação: registra o estoque atual como ponto de partida. Apenas contagem de abertura.</span>
+        <span>⚠️</span><span>Implantação: registra o estoque atual como ponto de partida. Apenas contagem de abertura. Só pode existir <strong>uma</strong> implantação.</span>
       </div>
+      <div class="alert alert-info" id="p-chain-note" style="display:none;margin-top:12px;margin-bottom:0"><span>🔗</span><span id="p-chain-text"></span></div>
     </div>
     <div class="modal-foot"><button class="btn btn-outline" onclick="closeM('m-period')">Cancelar</button><button class="btn btn-primary" onclick="savePeriod()">Criar Período</button></div>
   </div>
@@ -689,7 +854,10 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
         <span>💡</span>
         <span><strong>Fechado</strong> = quantidade de pacotes/caixas/sacos fechados (contagem exata, na unidade de compra).
         <strong>Aberto/Solto</strong> = quantidade solta na unidade de estoque, apenas do pacote em uso.
-        O sistema calcula o total automaticamente: Fechado × Fator + Aberto.</span>
+        O sistema calcula o total automaticamente: Fechado × Fator + Aberto. Aceita decimais (ex: 0,5 litro).</span>
+      </div>
+      <div class="alert alert-warn" id="cnt-exp-note" style="display:none;margin-bottom:14px">
+        <span>⏳</span><span>Contagem de <strong>implantação</strong>: informe a validade mais próxima dos itens que têm validade. É ela que alimenta o risco de vencimento do estoque que já existia antes do sistema.</span>
       </div>
       <div class="filter-bar" id="cnt-filters">
         <button class="fpill active" onclick="filterCntTable('',this)">Todos</button>
@@ -699,7 +867,7 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
         <button class="fpill" onclick="filterCntTable('Reagentes',this)">Reagentes</button>
       </div>
       <div class="cnt-scroll">
-        <table>
+        <table id="cnt-table">
           <thead>
             <tr>
               <th>Produto <span style="font-weight:400;color:var(--muted);text-transform:none">(conversão)</span></th>
@@ -710,6 +878,7 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
               <th style="text-align:center">Aberto/Solto<br><span style="font-weight:400;text-transform:none;font-size:9.5px">(unid. estoque)</span></th>
               <th style="text-align:center">Total</th>
               <th style="text-align:right">Valor</th>
+              <th class="cnt-exp-col">Validade<br><span style="font-weight:400;text-transform:none;font-size:9.5px">(mais próxima)</span></th>
             </tr>
           </thead>
           <tbody id="cnt-tbody"></tbody>
@@ -717,6 +886,7 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
             <td colspan="6" style="padding:10px 14px;font-weight:600">Total Geral</td>
             <td style="padding:10px 14px;text-align:center;font-weight:700" id="cnt-tot-qty">0</td>
             <td style="padding:10px 14px;text-align:right;font-weight:700;color:var(--primary);font-family:'DM Mono',monospace" id="cnt-tot-val">R$ 0,00</td>
+            <td class="cnt-exp-col"></td>
           </tr></tfoot>
         </table>
       </div>
@@ -732,7 +902,7 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
     <div class="modal-body">
       <input type="hidden" id="pu-edit-id">
       <div class="fr">
-        <div class="fg"><label>Data *</label><input type="date" id="pu-date"></div>
+        <div class="fg"><label>Data de Recebimento *</label><input type="date" id="pu-date" onchange="autoPeriodFor('pu-date','pu-period')"></div>
         <div class="fg"><label>Período *</label><select id="pu-period"><option value="">— Selecione —</option></select></div>
       </div>
       <div class="fg"><label>Produto *</label><select id="pu-product" onchange="onPurchaseProduct()"><option value="">— Selecione —</option></select></div>
@@ -744,7 +914,7 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
 
       <div class="fg"><label>Fornecedor</label><select id="pu-supplier"><option value="">— Selecione —</option></select></div>
       <div class="fr">
-        <div class="fg"><label id="pu-qty-lbl">Quantidade *</label><input type="number" id="pu-qty" min="1" value="1" oninput="calcPuTotal()"></div>
+        <div class="fg"><label id="pu-qty-lbl">Quantidade *</label><input type="number" id="pu-qty" min="0" step="any" value="1" oninput="calcPuTotal()"></div>
         <div class="fg"><label id="pu-cost-lbl">Custo Unitário (R$) *</label><input type="number" id="pu-cost" min="0" step="0.01" value="0" oninput="calcPuTotal()"></div>
       </div>
 
@@ -757,7 +927,12 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
         <div class="conv-hint" id="pu-derived-hint"></div>
       </div>
 
-      <div class="fg"><label>Total da Compra</label><input type="text" id="pu-total" readonly style="font-weight:700;color:var(--primary)"></div>
+      <div class="fr3">
+        <div class="fg"><label id="pu-exp-lbl">Validade</label><input type="date" id="pu-expiry"></div>
+        <div class="fg"><label>Lote</label><input type="text" id="pu-lot" placeholder="Opcional"></div>
+        <div class="fg"><label>Nº da Nota</label><input type="text" id="pu-invoice" placeholder="Opcional"></div>
+      </div>
+      <div class="fg"><label>Total da Compra <span id="pu-freight-lbl" style="text-transform:none;font-weight:400"></span></label><input type="text" id="pu-total" readonly style="font-weight:700;color:var(--primary)"></div>
     </div>
     <div class="modal-foot"><button class="btn btn-outline" onclick="closeM('m-purchase')">Cancelar</button><button class="btn btn-primary" id="pu-save-btn" onclick="savePurchase()">Registrar</button></div>
   </div>
@@ -771,7 +946,7 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
       <input type="hidden" id="prod-m-id">
       <div class="fg"><label>Nome *</label><input type="text" id="prod-m-name"></div>
       <div class="fg"><label>Categoria *</label>
-        <select id="prod-m-cat"><option value="">Selecione...</option><option>Diversas</option><option>Bioquímicos</option><option>Teste Rápido</option><option>Reagentes</option></select>
+        <select id="prod-m-cat" onchange="if(!document.getElementById('prod-m-id').value) document.getElementById('prod-m-exp').checked=CATS_VALIDADE.includes(this.value)"><option value="">Selecione...</option><option>Diversas</option><option>Bioquímicos</option><option>Teste Rápido</option><option>Reagentes</option></select>
       </div>
 
       <!-- BLOCO UOM -->
@@ -845,7 +1020,12 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
 
       <div class="divider"></div>
       <div class="fr">
-        <div class="fg"><label>Est. Mínimo (em Unid. de Estoque)</label><input type="number" id="prod-m-min" value="1" min="0"></div>
+        <div class="fg"><label>Est. Mínimo (em Unid. de Estoque)</label><input type="number" id="prod-m-min" value="1" min="0" step="any"></div>
+        <div class="fg"><label>Prazo de Entrega (dias)</label><input type="number" id="prod-m-lead" value="7" min="0" step="1"><div class="conv-hint">Usado no "pedir até" da reposição</div></div>
+      </div>
+      <div class="fg" style="display:flex;align-items:center;gap:8px">
+        <input type="checkbox" id="prod-m-exp" style="width:auto">
+        <label for="prod-m-exp" style="margin:0;text-transform:none;font-size:13px;color:var(--text)">Controla validade (exige data de validade ao registrar compra)</label>
       </div>
       <div class="fg"><label>Fornecedores (Ctrl+clique = múltiplos)</label><select id="prod-m-supps" multiple></select></div>
     </div>
@@ -879,6 +1059,13 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
       <div class="fr">
         <div class="fg"><label>Data de Início *</label><input type="date" id="pe-start"></div>
         <div class="fg" id="pe-end-grp"><label>Data de Fim</label><input type="date" id="pe-end"></div>
+      </div>
+      <div id="pe-rev-grp">
+        <div class="uom-section-label" style="margin-top:4px">💰 Faturamento do período (opcional)</div>
+        <div class="fr">
+          <div class="fg"><label>Faturamento Bruto (R$)</label><input type="number" id="pe-rev" step="0.01" min="0" placeholder="Em branco = usa o mensal"></div>
+          <div class="fg"><label>dos quais Terceirizados (R$)</label><input type="number" id="pe-outs" step="0.01" min="0"></div>
+        </div>
       </div>
       <div class="alert alert-warn" style="margin-bottom:0">
         <span>⚠️</span><span>O tipo do período não pode ser alterado para não comprometer os dados de contagem vinculados.</span>
@@ -940,6 +1127,105 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
   </div>
 </div>
 
+
+<!-- NOTA DE COMPRA (vários itens, frete, parcelamento) -->
+<div class="mo" id="m-nota">
+  <div class="modal modal-xl">
+    <div class="modal-hdr">
+      <div><h3>Registrar Nota de Compra</h3><div class="msub">Um lançamento por nota: os itens entram no estoque/CMV e, se parcelada, o cronograma vai para Caixa e Compras</div></div>
+      <button class="modal-x" onclick="closeM('m-nota')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="fr3">
+        <div class="fg"><label>Data de Recebimento *</label><input type="date" id="nt-date" onchange="autoPeriodFor('nt-date','nt-period')"></div>
+        <div class="fg"><label>Período *</label><select id="nt-period"><option value="">— Selecione —</option></select></div>
+        <div class="fg"><label>Fornecedor</label><select id="nt-supplier"><option value="">— Selecione —</option></select></div>
+      </div>
+      <div class="fr">
+        <div class="fg"><label>Nº da Nota</label><input type="text" id="nt-invoice" placeholder="Opcional"></div>
+        <div class="fg"><label>Frete da Nota (R$)</label><input type="number" id="nt-freight" min="0" step="0.01" value="0" oninput="calcNota()"><div class="conv-hint">Rateado entre os itens pelo valor de cada um</div></div>
+      </div>
+      <div class="divider"></div>
+      <div class="uom-section-label">📦 Itens da Nota</div>
+      <div class="tbl-wrap" style="border:1px solid var(--border);border-radius:8px">
+        <table>
+          <thead><tr><th style="min-width:210px">Produto</th><th>Qtd (unid. compra)</th><th>Custo/Unid. Compra (R$)</th><th style="text-align:center">Bonif.</th><th>Validade</th><th>Lote</th><th style="text-align:right">Subtotal</th><th></th></tr></thead>
+          <tbody id="nt-lines"></tbody>
+        </table>
+      </div>
+      <button class="btn btn-sm btn-outline" style="margin-top:10px" onclick="addNotaLine()">+ Adicionar item</button>
+      <div class="cc-total-chk">
+        <span class="text-muted">Itens:</span><strong class="mono" id="nt-sum-items">R$ 0,00</strong>
+        <span class="text-muted" style="margin-left:12px">Frete:</span><strong class="mono" id="nt-sum-freight">R$ 0,00</strong>
+        <span class="text-muted" style="margin-left:12px">Total da Nota:</span><strong class="mono text-primary" id="nt-sum-total">R$ 0,00</strong>
+      </div>
+      <div class="divider"></div>
+      <div class="fg" style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <input type="checkbox" id="nt-parc" style="width:auto" onchange="toggleNotaParc()">
+        <label for="nt-parc" style="margin:0;text-transform:none;font-size:13px;color:var(--text)"><strong>Pagamento parcelado</strong> — gera o cronograma em Caixa e Compras</label>
+      </div>
+      <div class="fr3" id="nt-parc-grp" style="display:none">
+        <div class="fg"><label>Nº de Parcelas</label><input type="number" id="nt-n" min="1" step="1" value="2" oninput="calcNota()"></div>
+        <div class="fg"><label>1º Vencimento</label><input type="date" id="nt-first" onchange="calcNota()"></div>
+        <div class="fg"><label>Intervalo</label><select id="nt-interval" onchange="calcNota()"><option value="month">Mensal</option><option value="15">Quinzenal</option><option value="7">Semanal</option></select></div>
+      </div>
+      <div class="conv-hint" id="nt-parc-preview"></div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-outline" onclick="closeM('m-nota')">Cancelar</button><button class="btn btn-primary" onclick="saveNota()">Registrar Nota</button></div>
+  </div>
+</div>
+
+<!-- PERDA -->
+<div class="mo" id="m-loss">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-hdr"><h3>Registrar Perda / Baixa</h3><button class="modal-x" onclick="closeM('m-loss')">×</button></div>
+    <div class="modal-body">
+      <div class="fr">
+        <div class="fg"><label>Data *</label><input type="date" id="ls-date" onchange="autoPeriodFor('ls-date','ls-period')"></div>
+        <div class="fg"><label>Período *</label><select id="ls-period"><option value="">— Selecione —</option></select></div>
+      </div>
+      <div class="fg"><label>Produto *</label><select id="ls-product" onchange="onLossProduct()"><option value="">— Selecione —</option></select></div>
+      <div class="fr">
+        <div class="fg"><label id="ls-qty-lbl">Quantidade (unid. estoque) *</label><input type="number" id="ls-qty" min="0" step="any" value="1" oninput="onLossProduct()"></div>
+        <div class="fg"><label>Motivo *</label><select id="ls-reason"><option>Vencido</option><option>Quebra</option><option>Contaminação</option><option>Outro</option></select></div>
+      </div>
+      <div class="fg"><label>Observação</label><input type="text" id="ls-notes" placeholder="Opcional"></div>
+      <div class="cost-derived"><span class="cd-lbl">Valor da perda (custo atual):</span><span class="cd-val" id="ls-val">—</span></div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-outline" onclick="closeM('m-loss')">Cancelar</button><button class="btn btn-primary" onclick="saveLoss()">Registrar</button></div>
+  </div>
+</div>
+
+<!-- EXPORTAR -->
+<div class="mo" id="m-export">
+  <div class="modal" style="max-width:600px">
+    <div class="modal-hdr"><div><h3>⬇ Exportar Dados do Sistema</h3><div class="msub">Extrai os dados em Excel (para análise) ou JSON (cópia completa do banco)</div></div><button class="modal-x" onclick="closeM('m-export')">×</button></div>
+    <div class="modal-body">
+      <div class="uom-section-label">Formato</div>
+      <div class="filter-bar" id="ex-fmt">
+        <button class="fpill active" data-v="xlsx" onclick="setExportOpt('ex-fmt',this)">📗 Excel (.xlsx)</button>
+        <button class="fpill" data-v="json" onclick="setExportOpt('ex-fmt',this)">🧾 JSON (.json)</button>
+        <button class="fpill" data-v="both" onclick="setExportOpt('ex-fmt',this)">Os dois</button>
+      </div>
+      <div class="uom-section-label" style="margin-top:6px">Filtro</div>
+      <div class="filter-bar" id="ex-mode">
+        <button class="fpill active" data-v="all" onclick="setExportOpt('ex-mode',this)">Tudo</button>
+        <button class="fpill" data-v="range" onclick="setExportOpt('ex-mode',this)">Intervalo de datas</button>
+        <button class="fpill" data-v="periods" onclick="setExportOpt('ex-mode',this)">Períodos</button>
+      </div>
+      <div class="fr" id="ex-range" style="display:none">
+        <div class="fg"><label>De</label><input type="date" id="ex-from"></div>
+        <div class="fg"><label>Até</label><input type="date" id="ex-to"></div>
+      </div>
+      <div id="ex-periods" style="display:none;max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px 12px;margin-bottom:12px"></div>
+      <div class="conv-hint" style="margin-bottom:6px">O filtro vale para contagens, compras, perdas, semanas do plano, parcelas (pelo vencimento) e faturamento.
+        Produtos, fornecedores e unidades saem sempre completos. Lotes e Reposição mostram a posição atual.</div>
+      <div id="ex-preview" class="conv-info-box" style="display:block"></div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-outline" onclick="closeM('m-export')">Cancelar</button><button class="btn btn-primary" onclick="runExport()">⬇ Baixar</button></div>
+  </div>
+</div>
+
 <!-- EDIÇÃO RÁPIDA UOM -->
 <div class="mo" id="m-quickedit">
   <div class="modal modal-xl">
@@ -988,12 +1274,477 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
 <!-- ══════════════════════════════════════════════════════════
      JAVASCRIPT
 ════════════════════════════════════════════════════════════ -->
+<script id="petlab-core">
+// ════════════════════════════════════════════════════════════════
+// PETLAB CORE — funções de cálculo puras (sem tela, sem banco).
+// Ficam num bloco separado para poderem ser testadas fora do navegador.
+// Todas leem o estado global S (preenchido pelo loadAll).
+// ════════════════════════════════════════════════════════════════
+const EPS = 1e-6;
+const COBERTURA_ALVO_DIAS = 28;      // reposição sugerida cobre 4 semanas + estoque mínimo
+const LEAD_TIME_PADRAO = 7;          // prazo de entrega padrão (dias) quando o produto não tem um
+const CATS_VALIDADE = ['Teste Rápido','Reagentes','Bioquímicos']; // validade obrigatória na compra
+const MESES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
+               'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+
+// ─── FORMATAÇÃO ───────────────────────────────────────────────
+function R(v){ if(v===null||v===undefined||isNaN(v)) return '—'; return new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(v); }
+function P(v){ if(v===null||v===undefined||!isFinite(v)) return '—'; return (v*100).toLocaleString('pt-BR',{minimumFractionDigits:1,maximumFractionDigits:1})+'%'; }
+function N(v,d){ if(v===null||v===undefined||!isFinite(v)) return '—'; return Number(v).toLocaleString('pt-BR',{maximumFractionDigits:(d===undefined?2:d)}); }
+function fmtDate(d){ if(!d) return '—'; const [y,m,dd]=String(d).slice(0,10).split('-'); return `${dd}/${m}/${y}`; }
+function cost_per_stock(purchaseCost, convFactor){ return (convFactor && convFactor > 0) ? purchaseCost / convFactor : purchaseCost; }
+function r2(v){ return Math.round((v+Number.EPSILON)*100)/100; }
+
+// ─── DATAS (sempre no fuso local — corrige o bug do UTC após as 21h) ──
+function isoOf(dt){ return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0'); }
+function parseISO(d){ const [y,m,dd]=String(d).slice(0,10).split('-').map(Number); return new Date(y,m-1,dd,12); }
+function today(){ if(typeof globalThis!=='undefined' && globalThis.__TODAY__) return globalThis.__TODAY__; return isoOf(new Date()); }
+function addDays(d,n){ const dt=parseISO(d); dt.setDate(dt.getDate()+n); return isoOf(dt); }
+function daysBetween(a,b){
+  const [y1,m1,d1]=String(a).slice(0,10).split('-').map(Number), [y2,m2,d2]=String(b).slice(0,10).split('-').map(Number);
+  return Math.round((Date.UTC(y2,m2-1,d2)-Date.UTC(y1,m1-1,d1))/86400000);
+}
+function mondayOf(d){ const dt=parseISO(d); const dow=dt.getDay(); dt.setDate(dt.getDate()+(dow===0?-6:1-dow)); return isoOf(dt); }
+function fmtDayMonth(d){ const dt=parseISO(d); return String(dt.getDate()).padStart(2,'0')+'/'+String(dt.getMonth()+1).padStart(2,'0'); }
+function weekLabel(d){ return fmtDayMonth(d)+' – '+fmtDayMonth(addDays(d,6)); }
+function addMonths(d,n){
+  const dt=parseISO(d); const day=dt.getDate();
+  const alvo=new Date(dt.getFullYear(), dt.getMonth()+n, 1, 12);
+  const ultimo=new Date(alvo.getFullYear(), alvo.getMonth()+1, 0).getDate();
+  alvo.setDate(Math.min(day, ultimo)); return isoOf(alvo);
+}
+function lastDayOfMonth(d){ const dt=parseISO(d); return isoOf(new Date(dt.getFullYear(), dt.getMonth()+1, 0, 12)); }
+function monthLabel(ym){ const [y,m]=ym.split('-').map(Number); return MESES[m-1]+'/'+y; }
+function maxDate(a,b){ if(!a) return b||null; if(!b) return a; return a>b?a:b; }
+function minDate(a,b){ if(!a) return b||null; if(!b) return a; return a<b?a:b; }
+
+// ─── PERÍODOS ─────────────────────────────────────────────────
+// Data de referência (competência) do período = data de fim. Semana que cruza o mês
+// pertence ao mês em que termina (regra F5).
+function periodRef(p){ return p.end || p.start; }
+function sortedPeriods(){ return [...S.periods].sort((a,b)=>(a.start||'').localeCompare(b.start||'') || a.id-b.id); }
+function implantacaoPeriod(){ return S.periods.filter(p=>p.type==='implantacao').sort((a,b)=>a.start.localeCompare(b.start))[0]||null; }
+// Período aberto que contém a data — usado para sugerir o período ao lançar compra/perda
+function periodForDate(date){
+  const cands=S.periods.filter(p=>p.status==='aberto' && p.type!=='implantacao' && p.start<=date && (!p.end || date<=p.end));
+  return cands.sort((a,b)=>b.start.localeCompare(a.start))[0]||null;
+}
+// Próximo período semanal sugerido: começa no dia seguinte ao fim do último período (ou na implantação)
+function suggestNextWeek(){
+  const seq=S.periods.filter(p=>p.type!=='implantacao' && p.end).sort((a,b)=>b.end.localeCompare(a.end));
+  let start;
+  if(seq.length) start=addDays(seq[0].end,1);
+  else { const imp=implantacaoPeriod(); start= imp ? imp.start : today(); }
+  return {start, end:addDays(start,6)};
+}
+// Regra P1: a contagem de fechamento da semana N é a abertura da semana N+1.
+// A implantação é a abertura do primeiro período. Só preenche aberturas vazias
+// (dados antigos são preservados — regra P2). Retorna a lista de vínculos a gravar.
+function computeChainLinks(){
+  const seq=S.periods.filter(p=>p.type!=='implantacao').sort((a,b)=>a.start.localeCompare(b.start) || a.id-b.id);
+  const imp=implantacaoPeriod();
+  const links=[]; let prev=null;
+  for(const p of seq){
+    if(!p.openCountId){
+      let src=null;
+      if(prev && prev.closeCountId) src=prev.closeCountId;
+      else if(!prev && imp && imp.openCountId && imp.start<=p.start) src=imp.openCountId;
+      if(src){ links.push({periodId:p.id, countId:src}); p.openCountId=src; }
+    }
+    prev=p;
+  }
+  return links;
+}
+
+// ─── CMV ──────────────────────────────────────────────────────
+function countVal(cnt){
+  return cnt.items.reduce((s,i)=>{
+    const snap=(i.snap!==undefined && i.snap!==null)?i.snap:(S.products.find(p=>p.id===i.pid)||{cost:0}).cost;
+    return s+(Number(i.total)||0)*(Number(snap)||0);
+  },0);
+}
+function lossVal(l){ return (Number(l.qty)||0)*(Number(l.snap)||0); }
+// CMV = Estoque Inicial + Compras (valor da nota, com frete) − Estoque Final
+// Perdas (vencido/quebra) já estão dentro dessa diferença; são mostradas à parte (regra C3).
+function calcCMVDetail(periodId){
+  const p=S.periods.find(x=>x.id===periodId); if(!p) return null;
+  const oc=p.openCountId?S.counts.find(c=>c.id===p.openCountId):null;
+  const cc=p.closeCountId?S.counts.find(c=>c.id===p.closeCountId):null;
+  const purch=S.purchases.filter(x=>x.periodId===periodId);
+  const compras=purch.reduce((s,x)=>s+(Number(x.total)||0),0);
+  const losses=(S.losses||[]).filter(l=>l.periodId===periodId);
+  const perdas=losses.reduce((s,l)=>s+lossVal(l),0);
+  const ei=oc?countVal(oc):null;
+  if(p.type==='implantacao'){
+    // Implantação é só o ponto de partida: não tem CMV (corrige o bug do CMV = estoque inteiro)
+    return {p,oc,cc:null,ei,compras,ef:null,cmv:null,perdas,consumo:null,purch,losses,implantacao:true,completo:false,revenue:null,outsourced:0,pct:null,pctInt:null};
+  }
+  const ef=cc?countVal(cc):null;
+  const completo=(ei!==null && ef!==null);
+  const cmv=completo? ei+compras-ef : null;
+  const revenue=(p.revenue!==null && p.revenue!==undefined && p.revenue!=='')?Number(p.revenue):null;
+  const outsourced=Number(p.outsourced)||0;
+  const pct=(cmv!==null && revenue>0)? cmv/revenue : null;
+  const pctInt=(cmv!==null && revenue!==null && revenue-outsourced>0)? cmv/(revenue-outsourced) : null;
+  return {p,oc,cc,ei,compras,ef,cmv,perdas,consumo:cmv!==null?cmv-perdas:null,purch,losses,implantacao:false,completo,revenue,outsourced,pct,pctInt};
+}
+function calcCMV(periodId){ const d=calcCMVDetail(periodId); return d?d.cmv:null; }
+// Série de períodos (sem implantação) em ordem cronológica, com média móvel de 4 períodos
+function cmvSeries(){
+  const list=S.periods.filter(p=>p.type!=='implantacao').sort((a,b)=>periodRef(a).localeCompare(periodRef(b))||a.id-b.id).map(p=>calcCMVDetail(p.id));
+  list.forEach((d,i)=>{
+    const win=list.slice(Math.max(0,i-3),i+1);
+    d.rolling4 = (win.length===4 && win.every(x=>x.completo && x.revenue>0))
+      ? win.reduce((s,x)=>s+x.cmv,0)/win.reduce((s,x)=>s+x.revenue,0) : null;
+  });
+  return list;
+}
+// Consolidado mensal: soma o CMV dos períodos completos que terminam no mês e divide pelo
+// faturamento do mês (lançamento mensal). Sem lançamento mensal, usa a soma dos semanais
+// — só se todos os períodos completos do mês tiverem faturamento semanal.
+function monthSummary(ym){
+  const periods=S.periods.filter(p=>p.type!=='implantacao' && periodRef(p) && periodRef(p).slice(0,7)===ym);
+  const det=periods.map(p=>calcCMVDetail(p.id));
+  const comp=det.filter(d=>d.completo);
+  const cmv=comp.length? comp.reduce((s,d)=>s+d.cmv,0) : null;
+  const perdas=comp.reduce((s,d)=>s+d.perdas,0);
+  const mr=(S.monthlyRevenue||[]).find(m=>m.month.slice(0,7)===ym)||null;
+  let rev=null, outs=0, fonte=null;
+  if(mr && Number(mr.revenue)>0){ rev=Number(mr.revenue); outs=Number(mr.outsourced)||0; fonte='mensal'; }
+  else if(comp.length && comp.every(d=>d.revenue>0)){ rev=comp.reduce((s,d)=>s+d.revenue,0); outs=comp.reduce((s,d)=>s+d.outsourced,0); fonte='semanal'; }
+  const overlap=periods.some(p=>p.type==='mensal') && periods.some(p=>p.type==='semanal');
+  return {ym, nPeriods:periods.length, nCompletos:comp.length, nPendentes:periods.length-comp.length,
+    cmv, perdas, consumo:cmv!==null?cmv-perdas:null, rev, outs, fonte, overlap, mr,
+    pct:(cmv!==null && rev>0)?cmv/rev:null, pctInt:(cmv!==null && rev!==null && rev-outs>0)?cmv/(rev-outs):null};
+}
+
+// ─── LOTES: ENTRADA, SAÍDA E TEMPO EM ESTOQUE ─────────────────
+// Não há digitação de saídas (regra D1). O consumo de cada intervalo entre contagens é
+// EI + entradas − perdas − EF (em unidade de estoque) e sai dos lotes pela regra
+// PVPS/FEFO: primeiro o que vence primeiro; sem validade, o que entrou primeiro.
+// Compra com data ≤ data da contagem já estava na prateleira quando contaram.
+function fefo(a,b){ return (a.expiry||'9999-12-31').localeCompare(b.expiry||'9999-12-31') || a.entry.localeCompare(b.entry) || a.seq-b.seq; }
+function buildLots(p){
+  const conv=p.convFactor||1;
+  const counts=S.counts.filter(c=>c.items.some(i=>i.pid===p.id)).map(c=>{
+    const it=c.items.find(i=>i.pid===p.id);
+    return {id:c.id, date:c.date, total:Number(it.total)||0, expiry:it.expiry||null};
+  }).sort((a,b)=>a.date.localeCompare(b.date)||a.id-b.id);
+  const res={product:p, lots:[], intervals:[], stock:0, baseline:null, lastCount:null, adjustments:0};
+  let seq=0;
+  const mk=o=>{o.seq=seq++; o.remaining=o.qtyIn; o.exitDate=null; res.lots.push(o); return o;};
+  const consume=(q,date)=>{
+    let left=q;
+    for(const l of res.lots.filter(l=>l.remaining>EPS).sort(fefo)){
+      if(left<=EPS) break;
+      const take=Math.min(l.remaining,left); l.remaining-=take; left-=take;
+      if(l.remaining<=EPS){ l.remaining=0; l.exitDate=date; }
+    }
+    return left;
+  };
+  const purchLot=(x)=>mk({src:x.isBonus?'Bonificação':'Compra', entry:x.date, qtyIn:(Number(x.qty)||0)*conv, expiry:x.expiry||null, purchaseId:x.id, commitmentId:x.commitmentId||null, lotCode:x.lotCode||''});
+  if(!counts.length){
+    S.purchases.filter(x=>x.prodId===p.id).sort((a,b)=>a.date.localeCompare(b.date)).forEach(purchLot);
+    res.stock=res.lots.reduce((s,l)=>s+l.remaining,0);
+    return res;
+  }
+  const base=counts[0]; res.baseline=base.date;
+  if(base.total>EPS) mk({src:'Estoque inicial', entry:base.date, qtyIn:base.total, expiry:base.expiry, purchaseId:null, commitmentId:null, lotCode:''});
+  const ev=[];
+  S.purchases.filter(x=>x.prodId===p.id && x.date>base.date).forEach(x=>ev.push({t:0,date:x.date,x}));
+  (S.losses||[]).filter(l=>l.prodId===p.id && l.date>base.date).forEach(l=>ev.push({t:1,date:l.date,l}));
+  counts.slice(1).forEach(c=>ev.push({t:2,date:c.date,c}));
+  ev.sort((a,b)=>a.date.localeCompare(b.date)||a.t-b.t);
+  let prev=base.date;
+  for(const e of ev){
+    if(e.t===0) purchLot(e.x);
+    else if(e.t===1) consume(Number(e.l.qty)||0, e.date);
+    else {
+      const expected=res.lots.reduce((s,l)=>s+l.remaining,0);
+      const diff=expected-e.c.total;
+      if(diff>EPS){ consume(diff,e.c.date); res.intervals.push({from:prev,to:e.c.date,days:daysBetween(prev,e.c.date),qty:diff,ajuste:0}); }
+      else {
+        // contagem acima do esperado = entrada não lançada ou erro de contagem
+        if(diff<-EPS){ mk({src:'Ajuste de contagem', entry:e.c.date, qtyIn:-diff, expiry:e.c.expiry, purchaseId:null, commitmentId:null, lotCode:''}); res.adjustments+=-diff; }
+        res.intervals.push({from:prev,to:e.c.date,days:daysBetween(prev,e.c.date),qty:0,ajuste:diff<-EPS?-diff:0});
+      }
+      prev=e.c.date;
+    }
+  }
+  res.lastCount=counts[counts.length-1].date;
+  res.stock=res.lots.reduce((s,l)=>s+l.remaining,0);
+  return res;
+}
+// Consumo médio diário: últimos intervalos até somar 28 dias ou 4 intervalos
+function consumptionRate(intervals){
+  let days=0,q=0,n=0;
+  for(let i=intervals.length-1;i>=0;i--){
+    const it=intervals[i]; if(it.days<=0) continue;
+    days+=it.days; q+=it.qty; n++;
+    if(days>=28||n>=4) break;
+  }
+  return days>0 ? q/days : null;
+}
+// Projeta a saída de cada lote no ritmo atual. Lote que vence antes de ser consumido
+// gera risco de perda; a ruptura considera que o lote vencido não pode ser usado.
+function projectLots(res, daily){
+  const ref=res.lastCount||today(); const t0=today();
+  let t=0; res.ruptura=null;
+  for(const l of res.lots.filter(l=>l.remaining>EPS).sort(fefo)){
+    l.atRisk=0; l.predictedExit=null; l.expired=!!(l.expiry && l.expiry<t0);
+    if(l.expired){ l.atRisk=l.remaining; continue; }
+    if(!daily||daily<=EPS) continue;
+    const start=t;
+    if(l.expiry){
+      const dExp=daysBetween(ref,l.expiry);
+      const consumable=Math.max(0,Math.min(l.remaining, daily*(dExp-start)));
+      if(consumable<l.remaining-EPS){ l.atRisk=l.remaining-consumable; t=start+consumable/daily; l.predictedExit=l.expiry; continue; }
+    }
+    t=start+l.remaining/daily; l.predictedExit=addDays(ref,Math.floor(t+1e-9));
+  }
+  if(daily>EPS) res.ruptura=addDays(ref,Math.floor(t+1e-9));
+  return res;
+}
+function replenishmentRow(p){
+  const res=buildLots(p);
+  const daily=consumptionRate(res.intervals);
+  projectLots(res,daily);
+  const lead=Number(p.leadTime)||LEAD_TIME_PADRAO;
+  const conv=p.convFactor||1;
+  const minQ=Number(p.min)||0;
+  const t=today();
+  const pedirAte=res.ruptura?addDays(res.ruptura,-lead):null;
+  const sugStock=(daily && daily>EPS)? minQ+daily*COBERTURA_ALVO_DIAS : null;
+  const sugUnits=sugStock!==null? Math.max(1,Math.ceil(sugStock/conv-1e-9)) : null;
+  const sugCost=sugUnits!==null? sugUnits*(Number(p.purchaseCost)||0) : null;
+  const open=res.lots.filter(l=>l.remaining>EPS);
+  const nearestExpiry=open.filter(l=>l.expiry).map(l=>l.expiry).sort()[0]||null;
+  const riskQty=open.reduce((s,l)=>s+(l.atRisk||0),0);
+  const exited=res.lots.filter(l=>l.exitDate);
+  const wq=exited.reduce((s,l)=>s+l.qtyIn,0);
+  const avgDays=wq>0? exited.reduce((s,l)=>s+l.qtyIn*daysBetween(l.entry,l.exitDate),0)/wq : null;
+  let status;
+  if(!res.lastCount) status='sem-contagem';
+  else if(pedirAte && pedirAte<t) status='atrasado';
+  else if(pedirAte && pedirAte<addDays(t,7)) status='esta-semana';
+  else if(minQ>0 && res.stock<=minQ) status='abaixo-minimo';
+  else if(!daily) status='sem-historico';
+  else status='ok';
+  return {p,res,daily,weekly:daily!==null?daily*7:null,coverage:(daily>EPS)?res.stock/daily:null,
+    ruptura:res.ruptura,pedirAte,lead,sugUnits,sugCost,nearestExpiry,riskQty,riskVal:riskQty*(Number(p.cost)||0),avgDays,status};
+}
+function buildReplenishment(){
+  const rows=S.products.filter(p=>p.active!==false).map(replenishmentRow);
+  const byPid={}; rows.forEach(r=>byPid[r.p.id]=r);
+  return {rows,byPid};
+}
+// Próximas N semanas: parcelas a vencer × reposição sugerida × itens vencendo
+function replenishmentWeeks(n, rep){
+  rep=rep||buildReplenishment(); n=n||8;
+  const w0=mondayOf(today()); const out=[];
+  const planRows=(typeof computePlan==='function')?computePlan():[];
+  for(let k=0;k<n;k++){
+    const ws=addDays(w0,7*k), we=addDays(ws,6);
+    const inW=d=> d && (k===0? d<=we : (d>=ws && d<=we));
+    const parc=(S.installments||[]).filter(i=>!i.paid && inW(i.due));
+    const sug=rep.rows.filter(r=>r.pedirAte && r.sugCost!==null && inW(r.pedirAte));
+    const venc=[]; rep.rows.forEach(r=>r.res.lots.forEach(l=>{ if(l.remaining>EPS && l.atRisk>EPS && inW(l.expiry)) venc.push({r,l,val:l.atRisk*(Number(r.p.cost)||0)}); }));
+    const pr=planRows.find(w=>w.week===ws)||null;
+    const parcTot=parc.reduce((s,i)=>s+i.amount,0), sugTot=sug.reduce((s,r)=>s+r.sugCost,0);
+    out.push({ws,we,parc,parcTot,sug,sugTot,venc,vencTot:venc.reduce((s,v)=>s+v.val,0),
+      saldo:pr?pr.final:null, aperto: pr? (pr.final-parcTot-sugTot<0) : null});
+  }
+  return out;
+}
+// Prazo de pagamento × prazo de consumo de uma compra parcelada
+function commitmentHorizon(commitId, rep){
+  rep=rep||buildReplenishment();
+  const purch=S.purchases.filter(x=>x.commitmentId===commitId);
+  let materialAte=null, desconhecido=false;
+  purch.forEach(x=>{
+    const r=rep.byPid[x.prodId]; const lot=r?r.res.lots.find(l=>l.purchaseId===x.id):null;
+    const d=lot? (lot.exitDate || lot.predictedExit || (lot.expired?lot.expiry:null)) : null;
+    if(d) materialAte=maxDate(materialAte,d); else desconhecido=true;
+  });
+  const parcs=(S.installments||[]).filter(i=>i.commitId===commitId);
+  const ultima=parcs.map(i=>i.due).sort().pop()||null;
+  return {nItens:purch.length, materialAte, desconhecido, ultimaParcela:ultima,
+    pagaDepois: !!(materialAte && ultima && ultima>materialAte), diasDepois: (materialAte&&ultima)?daysBetween(materialAte,ultima):null};
+}
+// Rateio do frete da nota proporcional ao valor de cada item (resto na última linha).
+// Se todos os itens forem bonificação (valor 0), rateia pela quantidade.
+function allocateFreight(lines, freight){
+  freight=Number(freight)||0;
+  const base=lines.map(l=>(Number(l.qty)||0)*(l.isBonus?0:(Number(l.cost)||0)));
+  let tot=base.reduce((s,v)=>s+v,0); let w=base;
+  if(tot<=EPS){ w=lines.map(l=>Number(l.qty)||0); tot=w.reduce((s,v)=>s+v,0); }
+  let acc=0;
+  return lines.map((l,i)=>{
+    if(i===lines.length-1) return r2(freight-acc);
+    const v=tot>EPS? r2(freight*w[i]/tot) : 0; acc+=v; return v;
+  });
+}
+// Bug 4: só a compra mais recente (por data de recebimento) atualiza o custo atual do produto
+function isLatestPurchase(prodId, date, excludeId){
+  return !S.purchases.some(x=>x.prodId===prodId && x.id!==excludeId && Number(x.cost)>0 && x.date>date);
+}
+function splitInstallments(total, n, first, interval){
+  n=Math.max(1,parseInt(n)||1); const base=r2(total/n); const out=[];
+  for(let k=0;k<n;k++){
+    const due=(interval==='month')?addMonths(first,k):addDays(first,parseInt(interval)*k);
+    out.push({seq_no:k+1, due_date:due, amount:(k===n-1)?r2(total-base*(n-1)):base});
+  }
+  return out;
+}
+
+// ─── EXPORTAÇÃO ───────────────────────────────────────────────
+// filter: {mode:'all'|'range'|'periods', from, to, periodIds:[...]}
+// Cadastros (produtos, fornecedores, unidades) saem sempre completos.
+function buildExportData(filter){
+  filter=filter||{mode:'all'};
+  const mode=filter.mode||'all';
+  let from=filter.from||null, to=filter.to||null, pset=null;
+  if(mode==='periods'){
+    pset=new Set((filter.periodIds||[]).map(Number));
+    const sel=S.periods.filter(p=>pset.has(p.id));
+    from=sel.map(p=>p.start).sort()[0]||null;
+    to=sel.map(p=>p.end||p.start).sort().pop()||null;
+  }
+  const all=mode==='all';
+  const inR=d=> all || (!!d && (!from||d>=from) && (!to||d<=to));
+  const ovl=(a,b)=> all || ((!to||a<=to) && (!from||(b||a)>=from));
+  const keep=(pid,date)=> all || (pset? pset.has(pid) : inR(date));
+  const pname=id=>(S.products.find(p=>p.id===id)||{}).name||'';
+  const sname=id=>(S.suppliers.find(s=>s.id===id)||{}).name||'';
+  const plabel=id=>(S.periods.find(p=>p.id===id)||{}).label||'';
+
+  const periods=S.periods.filter(p=> all || (pset? pset.has(p.id) : ovl(p.start,p.end||p.start)));
+  const counts=S.counts.filter(c=>keep(c.periodId,c.date));
+  const purchases=S.purchases.filter(x=>keep(x.periodId,x.date));
+  const losses=(S.losses||[]).filter(l=>keep(l.periodId,l.date));
+  const plan=(S.plan||[]).filter(w=>ovl(w.week,addDays(w.week,6)));
+  const insts=(S.installments||[]).filter(i=>inR(i.due));
+  const commits=(S.commits||[]).filter(c=> all || insts.some(i=>i.commitId===c.id) || inR(c.date));
+  const monthly=(S.monthlyRevenue||[]).filter(m=>ovl(m.month.slice(0,10),lastDayOfMonth(m.month)));
+  const rep=buildReplenishment();
+  const series=cmvSeries();
+  const months=[...new Set([...periods.filter(p=>p.type!=='implantacao').map(p=>periodRef(p).slice(0,7)), ...monthly.map(m=>m.month.slice(0,7))])].sort();
+
+  const descr= all ? 'Todos os dados' : (mode==='periods'
+      ? 'Períodos: '+periods.map(p=>p.label).join('; ')
+      : `De ${fmtDate(from)} a ${fmtDate(to)}`);
+
+  const sheets=[];
+  sheets.push({name:'Resumo', cols:['Item','Valor'], rows:[
+    {Item:'Gerado em', Valor:today()},
+    {Item:'Filtro', Valor:descr},
+    {Item:'Períodos', Valor:periods.length},
+    {Item:'Contagens', Valor:counts.length},
+    {Item:'Compras (linhas)', Valor:purchases.length},
+    {Item:'Perdas', Valor:losses.length},
+    {Item:'Parcelas', Valor:insts.length},
+    {Item:'Observação', Valor:'Lotes e Reposição refletem a posição atual do estoque. CMV = Est. Inicial + Compras − Est. Final.'}
+  ]});
+  sheets.push({name:'CMV por Período', cols:['Período','Tipo','Início','Fim','Status','Est. Inicial (R$)','Compras (R$)','Est. Final (R$)','CMV (R$)','Perdas (R$)','CMV Consumo (R$)','Faturamento Semanal (R$)','Terceirizados (R$)','CMV %','CMV % s/ internos','CMV % média 4 períodos'],
+    rows:series.filter(d=>periods.some(p=>p.id===d.p.id)).map(d=>({'Período':d.p.label,'Tipo':d.p.typeLabel,'Início':d.p.start,'Fim':d.p.end,'Status':d.p.status,
+      'Est. Inicial (R$)':d.ei,'Compras (R$)':d.compras,'Est. Final (R$)':d.ef,'CMV (R$)':d.cmv,'Perdas (R$)':d.perdas,'CMV Consumo (R$)':d.consumo,
+      'Faturamento Semanal (R$)':d.revenue,'Terceirizados (R$)':d.revenue!==null?d.outsourced:null,'CMV %':d.pct,'CMV % s/ internos':d.pctInt,'CMV % média 4 períodos':d.rolling4}))});
+  sheets.push({name:'Faturamento Mensal', cols:['Mês','Faturamento Bruto (R$)','Terceirizados (R$)','Fonte do Faturamento','Períodos no Mês','Períodos Completos','CMV (R$)','Perdas (R$)','CMV %','CMV % s/ internos'],
+    rows:months.map(ym=>{const m=monthSummary(ym); return {'Mês':ym,'Faturamento Bruto (R$)':m.rev,'Terceirizados (R$)':m.rev!==null?m.outs:null,'Fonte do Faturamento':m.fonte||'não lançado',
+      'Períodos no Mês':m.nPeriods,'Períodos Completos':m.nCompletos,'CMV (R$)':m.cmv,'Perdas (R$)':m.perdas,'CMV %':m.pct,'CMV % s/ internos':m.pctInt};})});
+  const ci=[];
+  counts.forEach(c=>c.items.forEach(i=>{ const pr=S.products.find(p=>p.id===i.pid)||{};
+    ci.push({'Data':c.date,'Período':plabel(c.periodId),'Tipo':c.type,'Produto':pname(i.pid),'Categoria':pr.cat||'','Unid. Estoque':pr.stockUnit||'',
+      'Fechado (unid. compra)':i.f,'Aberto (unid. estoque)':i.a,'Total (unid. estoque)':i.total,'Custo/Unid. (R$)':i.snap,'Valor (R$)':(Number(i.total)||0)*(Number(i.snap)||0),'Validade':i.expiry||null}); }));
+  sheets.push({name:'Contagens', cols:['Data','Período','Tipo','Produto','Categoria','Unid. Estoque','Fechado (unid. compra)','Aberto (unid. estoque)','Total (unid. estoque)','Custo/Unid. (R$)','Valor (R$)','Validade'], rows:ci});
+  sheets.push({name:'Compras', cols:['Data Recebimento','Período','Nº Nota','Produto','Fornecedor','Qtd (unid. compra)','Unid. Compra','Custo/Unid. Compra (R$)','Bonificação','Frete Rateado (R$)','Total (R$)','Validade','Lote','Parcelada'],
+    rows:purchases.map(x=>{const pr=S.products.find(p=>p.id===x.prodId)||{}; return {'Data Recebimento':x.date,'Período':plabel(x.periodId),'Nº Nota':x.invoice||'','Produto':pname(x.prodId),'Fornecedor':sname(x.suppId),
+      'Qtd (unid. compra)':x.qty,'Unid. Compra':pr.purchaseUnit||'','Custo/Unid. Compra (R$)':x.cost,'Bonificação':x.isBonus?'Sim':'Não','Frete Rateado (R$)':x.freight||0,'Total (R$)':x.total,'Validade':x.expiry||null,'Lote':x.lotCode||'','Parcelada':x.commitmentId?'Sim':'Não'};})});
+  sheets.push({name:'Perdas', cols:['Data','Período','Produto','Qtd (unid. estoque)','Motivo','Custo/Unid. (R$)','Valor (R$)','Obs.'],
+    rows:losses.map(l=>({'Data':l.date,'Período':plabel(l.periodId),'Produto':pname(l.prodId),'Qtd (unid. estoque)':l.qty,'Motivo':l.reason,'Custo/Unid. (R$)':l.snap,'Valor (R$)':lossVal(l),'Obs.':l.notes||''}))});
+  const lots=[];
+  rep.rows.forEach(r=>r.res.lots.forEach(l=>{
+    if(!ovl(l.entry, l.exitDate||today())) return;
+    lots.push({'Produto':r.p.name,'Origem':l.src,'Lote':l.lotCode||'','Entrada':l.entry,'Qtd Entrada':l.qtyIn,'Saldo Atual':l.remaining,'Validade':l.expiry||null,
+      'Saída (acabou em)':l.exitDate,'Saída Prevista':l.exitDate?null:l.predictedExit,'Dias em Estoque':daysBetween(l.entry,l.exitDate||today()),'Qtd em Risco de Vencer':l.atRisk||0,'Unid. Estoque':r.p.stockUnit});
+  }));
+  sheets.push({name:'Lotes', cols:['Produto','Origem','Lote','Entrada','Qtd Entrada','Saldo Atual','Validade','Saída (acabou em)','Saída Prevista','Dias em Estoque','Qtd em Risco de Vencer','Unid. Estoque'], rows:lots});
+  sheets.push({name:'Reposição e Validade', cols:['Produto','Categoria','Estoque Atual','Unid. Estoque','Consumo Semanal','Cobertura (dias)','Ruptura Prevista','Prazo Entrega (dias)','Pedir Até','Situação','Sugestão (unid. compra)','Unid. Compra','Custo Sugestão (R$)','Validade Mais Próxima','Qtd em Risco','Risco de Perda (R$)','Tempo Médio em Estoque (dias)'],
+    rows:rep.rows.map(r=>({'Produto':r.p.name,'Categoria':r.p.cat,'Estoque Atual':r.res.stock,'Unid. Estoque':r.p.stockUnit,'Consumo Semanal':r.weekly,'Cobertura (dias)':r.coverage,'Ruptura Prevista':r.ruptura,
+      'Prazo Entrega (dias)':r.lead,'Pedir Até':r.pedirAte,'Situação':STATUS_LABEL[r.status]||r.status,'Sugestão (unid. compra)':r.sugUnits,'Unid. Compra':r.p.purchaseUnit,'Custo Sugestão (R$)':r.sugCost,
+      'Validade Mais Próxima':r.nearestExpiry,'Qtd em Risco':r.riskQty,'Risco de Perda (R$)':r.riskVal,'Tempo Médio em Estoque (dias)':r.avgDays}))});
+  sheets.push({name:'Produtos', cols:['ID','Nome','Categoria','Unid. Compra','Unid. Estoque','Fator','Custo/Unid. Compra (R$)','Custo/Unid. Estoque (R$)','Sub-unidade','Qtd Sub-unid.','Est. Mínimo','Prazo Entrega (dias)','Controla Validade','Fornecedores'],
+    rows:S.products.map(p=>({'ID':p.id,'Nome':p.name,'Categoria':p.cat,'Unid. Compra':p.purchaseUnit,'Unid. Estoque':p.stockUnit,'Fator':p.convFactor,'Custo/Unid. Compra (R$)':p.purchaseCost,'Custo/Unid. Estoque (R$)':p.cost,
+      'Sub-unidade':p.subUnitLabel||'','Qtd Sub-unid.':p.subUnitQty||null,'Est. Mínimo':p.min,'Prazo Entrega (dias)':p.leadTime,'Controla Validade':p.tracksExpiry?'Sim':'Não','Fornecedores':(p.supps||[]).map(sname).join(', ')}))});
+  sheets.push({name:'Fornecedores', cols:['ID','Nome','Contato','Telefone'], rows:S.suppliers.map(s=>({'ID':s.id,'Nome':s.name,'Contato':s.contact||'','Telefone':s.phone||''}))});
+  sheets.push({name:'Unidades', cols:['Unidade'], rows:(S.units||[]).map(u=>({'Unidade':u.name}))});
+  sheets.push({name:'Plano Semanal', cols:['Semana (início)','Saldo Inicial (R$)','Recebimentos (R$)','Pagamentos (R$)','Saldo Final (R$)','Compras Planejadas (R$)','Obs.'],
+    rows:plan.map(w=>({'Semana (início)':w.week,'Saldo Inicial (R$)':w.opening,'Recebimentos (R$)':w.receipts,'Pagamentos (R$)':w.payments,'Saldo Final (R$)':w.opening+w.receipts-w.payments,'Compras Planejadas (R$)':w.purchases,'Obs.':w.notes||''}))});
+  sheets.push({name:'Compras Parceladas', cols:['ID','Fornecedor','Descrição','Data da Compra','Valor Total (R$)','Parcelas','Saldo Devedor (R$)','Material Dura Até','Última Parcela','Paga Após Acabar'],
+    rows:commits.map(c=>{const h=commitmentHorizon(c.id,rep); return {'ID':c.id,'Fornecedor':sname(c.suppId),'Descrição':c.desc,'Data da Compra':c.date,'Valor Total (R$)':c.total,'Parcelas':c.n,
+      'Saldo Devedor (R$)':(S.installments||[]).filter(i=>i.commitId===c.id&&!i.paid).reduce((s,i)=>s+i.amount,0),'Material Dura Até':h.materialAte,'Última Parcela':h.ultimaParcela,'Paga Após Acabar':h.nItens?(h.pagaDepois?'Sim':'Não'):'Sem itens vinculados'};})});
+  sheets.push({name:'Parcelas', cols:['Compra (ID)','Fornecedor','Parcela','Vencimento','Valor (R$)','Pago','Data Pagamento'],
+    rows:insts.map(i=>{const c=(S.commits||[]).find(x=>x.id===i.commitId)||{}; return {'Compra (ID)':i.commitId,'Fornecedor':sname(c.suppId),'Parcela':`${i.seq}/${c.n||'?'}`,'Vencimento':i.due,'Valor (R$)':i.amount,'Pago':i.paid?'Sim':'Não','Data Pagamento':i.paidDate||null};})});
+
+  // JSON: linhas cruas do banco (exatamente como estão no Supabase), filtradas pelos mesmos critérios
+  const RAW=S.raw||{}; const ids=arr=>new Set(arr.map(x=>x.id));
+  const pick=(t,set)=>(RAW[t]||[]).filter(r=>set.has(r.id));
+  const cntIds=ids(counts);
+  const raw={
+    products:RAW.products||[], product_suppliers:RAW.product_suppliers||[], suppliers:RAW.suppliers||[], units:RAW.units||[],
+    periods:pick('periods',ids(periods)),
+    stock_counts:pick('stock_counts',cntIds),
+    count_items:(RAW.count_items||[]).filter(r=>cntIds.has(r.count_id)),
+    purchases:pick('purchases',ids(purchases)),
+    stock_losses:pick('stock_losses',ids(losses)),
+    monthly_revenue:pick('monthly_revenue',ids(monthly)),
+    purchase_plan:pick('purchase_plan',ids(plan)),
+    commitments:pick('commitments',ids(commits)),
+    commitment_installments:pick('commitment_installments',ids(insts)),
+    app_settings:RAW.app_settings||[]
+  };
+  const calc={}; sheets.slice(1).forEach(sh=>{ if(['CMV por Período','Faturamento Mensal','Lotes','Reposição e Validade','Compras Parceladas'].includes(sh.name)) calc[sh.name]=sh.rows; });
+  return {meta:{sistema:'PetLab — Controle de Estoque', versao:'v7', gerado_em:new Date().toISOString(), filtro:{...filter, descricao:descr}}, sheets, raw, calc};
+}
+const STATUS_LABEL={'atrasado':'Pedido atrasado','esta-semana':'Pedir esta semana','abaixo-minimo':'Abaixo do mínimo','sem-historico':'Sem histórico de consumo','sem-contagem':'Sem contagem','ok':'OK'};
+// Monta uma planilha com formatos: datas como data, R$ com 2 casas, % como percentual
+function sheetFromRows(XLSXlib, sh){
+  const aoa=[sh.cols];
+  sh.rows.forEach(r=>aoa.push(sh.cols.map(c=>{
+    let v=r[c]; if(v===undefined||v===null||(typeof v==='number'&&!isFinite(v))) return null;
+    // data → número de série do Excel (independe de fuso e do objeto Date)
+    if(typeof v==='string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) return {__d:daysBetween('1899-12-30',v)};
+    if(typeof v==='number') return Math.round(v*1e6)/1e6;
+    return v;
+  })));
+  const isDate=aoa.map(r=>r.map(v=>!!(v && typeof v==='object' && '__d' in v)));
+  const plain=aoa.map(r=>r.map(v=>(v && typeof v==='object' && '__d' in v)?v.__d:v));
+  const ws=XLSXlib.utils.aoa_to_sheet(plain);
+  sh.cols.forEach((c,ci)=>{
+    const fmt= c.includes('%') ? '0.0%' : (c.includes('R$') ? '#,##0.00' : null);
+    for(let ri=1;ri<plain.length;ri++){
+      const addr=XLSXlib.utils.encode_cell({r:ri,c:ci}); const cell=ws[addr]; if(!cell) continue;
+      if(isDate[ri][ci]) cell.z='dd/mm/yyyy'; else if(fmt && cell.t==='n') cell.z=fmt;
+    }
+  });
+  ws['!cols']=sh.cols.map(c=>({wch:Math.max(10,Math.min(40,c.length+4))}));
+  return ws;
+}
+function buildWorkbook(XLSXlib, data){
+  const wb=XLSXlib.utils.book_new();
+  data.sheets.forEach(sh=>XLSXlib.utils.book_append_sheet(wb, sheetFromRows(XLSXlib,sh), sh.name.slice(0,31)));
+  return wb;
+}
+</script>
+
 <script>
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // ─── STATE ────────────────────────────────────────────────────
-let S = { products:[], suppliers:[], periods:[], counts:[], purchases:[], units:[], plan:[], commits:[], installments:[] };
+let S = { products:[], suppliers:[], periods:[], counts:[], purchases:[], units:[], plan:[], commits:[], installments:[],
+          losses:[], monthlyRevenue:[], settings:{}, raw:{} };
 let prodCatFilter = '';
+let repFilter = 'acao';
 
 // ─── LOADING & TOAST ──────────────────────────────────────────
 function setLoading(v){ document.getElementById('loader').style.display = v ? 'flex' : 'none'; }
@@ -1006,10 +1757,16 @@ function toast(msg, type='ok'){
 }
 
 // ─── DATA LOADING ─────────────────────────────────────────────
+// S.raw guarda as linhas exatamente como vêm do Supabase — usado na exportação JSON
 async function loadAll(){
   setLoading(true);
   try {
-    await Promise.all([loadSuppliers(), loadProducts(), loadPeriods(), loadCounts(), loadPurchases(), loadUnits(), loadPlan(), loadCommitments()]);
+    await Promise.all([loadSuppliers(), loadProducts(), loadPeriods(), loadCounts(), loadPurchases(), loadUnits(), loadPlan(), loadCommitments(), loadLosses(), loadRevenue(), loadSettings()]);
+    // Regra P1: cada período abre com o fechamento do anterior (só preenche aberturas vazias)
+    const links = computeChainLinks();
+    if(links.length){
+      await Promise.all(links.map(l => sb.from('periods').update({open_count_id:l.countId}).eq('id', l.periodId)));
+    }
     renderAll();
   } catch(e) {
     console.error(e);
@@ -1020,15 +1777,19 @@ async function loadAll(){
 async function loadSuppliers(){
   const {data,error} = await sb.from('suppliers').select('*').order('name');
   if(error) throw error;
+  S.raw.suppliers = data;
   S.suppliers = data;
 }
 
 async function loadProducts(){
-  const [{data:prods,error:e1},{data:ps,error:e2}] = await Promise.all([
+  const [{data:prods,error:e1},{data:ps,error:e2},{data:inactive}] = await Promise.all([
     sb.from('products').select('*').eq('active',true).order('name'),
-    sb.from('product_suppliers').select('*')
+    sb.from('product_suppliers').select('*'),
+    sb.from('products').select('*').eq('active',false)
   ]);
   if(e1) throw e1; if(e2) throw e2;
+  S.raw.products = [...prods, ...(inactive||[])];
+  S.raw.product_suppliers = ps;
 
   S.products = prods.map(p => {
     const convFactor = parseFloat(p.conversion_factor) || 1;
@@ -1042,7 +1803,7 @@ async function loadProducts(){
     return {
       ...p,
       cat: p.cat,
-      min: p.min_stock,
+      min: parseFloat(p.min_stock) || 0,
       cost: parseFloat(p.unit_cost) || 0,         // custo por UNIDADE DE ESTOQUE
       purchaseUnit: p.purchase_unit || 'Unidade',
       stockUnit: p.unit || 'Unidade',              // 'unit' no DB = unidade de estoque
@@ -1051,6 +1812,9 @@ async function loadProducts(){
       subUnitLabel: p.sub_unit_label || '',
       subUnitQty,
       subUnitCost,
+      leadTime: (p.lead_time_days===null||p.lead_time_days===undefined) ? LEAD_TIME_PADRAO : parseInt(p.lead_time_days),
+      // sem a coluna (migração não rodada) usa a regra por categoria
+      tracksExpiry: (p.tracks_expiry===null||p.tracks_expiry===undefined) ? CATS_VALIDADE.includes(p.cat) : !!p.tracks_expiry,
       supps: ps.filter(x => x.product_id === p.id).map(x => x.supplier_id)
     };
   });
@@ -1058,8 +1822,8 @@ async function loadProducts(){
 
 async function loadUnits(){
   const {data,error} = await sb.from('units').select('*').order('name');
-  if(error){ S.units=[]; return; } // tabela pode não existir ainda — não quebra o sistema
-  S.units = data;
+  if(error){ S.units=[]; S.raw.units=[]; return; } // tabela pode não existir ainda — não quebra o sistema
+  S.units = data; S.raw.units = data;
   renderUnitsDatalist();
 }
 function renderUnitsDatalist(){
@@ -1082,9 +1846,12 @@ async function autoRegisterUnits(names){
 async function loadPeriods(){
   const {data,error} = await sb.from('periods').select('*').order('created_at',{ascending:false});
   if(error) throw error;
+  S.raw.periods = data;
   S.periods = data.map(p => ({
     ...p, start:p.start_date, end:p.end_date, typeLabel:p.type_label,
-    openCountId:p.open_count_id, closeCountId:p.close_count_id
+    openCountId:p.open_count_id, closeCountId:p.close_count_id,
+    revenue:(p.revenue===null||p.revenue===undefined)?null:parseFloat(p.revenue),
+    outsourced:parseFloat(p.outsourced_revenue)||0
   }));
 }
 
@@ -1092,11 +1859,13 @@ async function loadCounts(){
   const {data,error} = await sb.from('stock_counts')
     .select('*, count_items(*)').order('date',{ascending:false});
   if(error) throw error;
+  S.raw.stock_counts = data.map(({count_items, ...c}) => c);
+  S.raw.count_items = data.flatMap(c => c.count_items || []);
   S.counts = data.map(c => ({
     ...c, periodId:c.period_id,
     items:(c.count_items||[]).map(i=>({
-      pid:i.product_id, f:i.qty_closed, a:i.qty_open,
-      total:i.total, snap:i.cost_snapshot
+      pid:i.product_id, f:parseFloat(i.qty_closed)||0, a:parseFloat(i.qty_open)||0,
+      total:parseFloat(i.total)||0, snap:parseFloat(i.cost_snapshot)||0, expiry:i.expiry_date||null
     }))
   }));
 }
@@ -1104,15 +1873,20 @@ async function loadCounts(){
 async function loadPurchases(){
   const {data,error} = await sb.from('purchases').select('*').order('date',{ascending:false});
   if(error) throw error;
+  S.raw.purchases = data;
   S.purchases = data.map(p => ({
-    ...p, periodId:p.period_id, prodId:p.product_id, suppId:p.supplier_id
+    ...p, periodId:p.period_id, prodId:p.product_id, suppId:p.supplier_id,
+    qty:parseFloat(p.qty)||0, cost:parseFloat(p.cost)||0, total:parseFloat(p.total)||0,
+    freight:parseFloat(p.freight_alloc)||0, expiry:p.expiry_date||null, lotCode:p.lot_code||'',
+    invoice:p.invoice_number||'', isBonus:!!p.is_bonus, commitmentId:p.commitment_id||null
   }));
 }
 
 // Planejamento semanal de compras — tabela purchase_plan
 async function loadPlan(){
   const {data,error} = await sb.from('purchase_plan').select('*').order('week_start',{ascending:true});
-  if(error){ S.plan=[]; return; } // tabela pode não existir ainda — não quebra o sistema
+  if(error){ S.plan=[]; S.raw.purchase_plan=[]; return; } // tabela pode não existir ainda — não quebra o sistema
+  S.raw.purchase_plan = data;
   S.plan = data.map(w => ({
     id: w.id,
     week: w.week_start,
@@ -1131,7 +1905,8 @@ async function loadCommitments(){
     sb.from('commitments').select('*').order('purchase_date',{ascending:false}),
     sb.from('commitment_installments').select('*').order('due_date',{ascending:true})
   ]);
-  if(c.error || i.error){ S.commits=[]; S.installments=[]; return; } // tabelas podem não existir ainda
+  if(c.error || i.error){ S.commits=[]; S.installments=[]; S.raw.commitments=[]; S.raw.commitment_installments=[]; return; } // tabelas podem não existir ainda
+  S.raw.commitments = c.data; S.raw.commitment_installments = i.data;
   S.commits = c.data.map(x=>({
     id:x.id, suppId:x.supplier_id, desc:x.description||'',
     date:x.purchase_date, total:parseFloat(x.total_amount)||0,
@@ -1142,6 +1917,27 @@ async function loadCommitments(){
     due:x.due_date, amount:parseFloat(x.amount)||0,
     paid:!!x.paid, paidDate:x.paid_date
   }));
+}
+
+// v7 — perdas, faturamento mensal e configurações (tabelas podem não existir antes da migração)
+async function loadLosses(){
+  const {data,error} = await sb.from('stock_losses').select('*').order('date',{ascending:false});
+  if(error){ S.losses=[]; S.raw.stock_losses=[]; return; }
+  S.raw.stock_losses = data;
+  S.losses = data.map(l=>({id:l.id, periodId:l.period_id, prodId:l.product_id, date:l.date,
+    qty:parseFloat(l.qty)||0, reason:l.reason||'Outro', snap:parseFloat(l.cost_snapshot)||0, notes:l.notes||''}));
+}
+async function loadRevenue(){
+  const {data,error} = await sb.from('monthly_revenue').select('*').order('month');
+  if(error){ S.monthlyRevenue=[]; S.raw.monthly_revenue=[]; return; }
+  S.raw.monthly_revenue = data;
+  S.monthlyRevenue = data.map(m=>({id:m.id, month:m.month, revenue:parseFloat(m.revenue)||0, outsourced:parseFloat(m.outsourced_revenue)||0, notes:m.notes||''}));
+}
+async function loadSettings(){
+  const {data,error} = await sb.from('app_settings').select('*');
+  if(error){ S.settings={}; S.raw.app_settings=[]; return; }
+  S.raw.app_settings = data;
+  S.settings = Object.fromEntries(data.map(r=>[r.key, r.value]));
 }
 
 // ─── REAL-TIME ────────────────────────────────────────────────
@@ -1159,17 +1955,23 @@ function startRealtime(){
 function renderAll(){
   renderProducts(); renderSuppliers(); renderPeriods();
   renderCounts(); renderPurchases(); renderDashboard(); updateAlertBadge();
-  renderCommitments(); updateCommitBadge();
-  // Não redesenha o plano se a pessoa está digitando dentro dele (evita perder o foco)
-  if(!document.activeElement || !document.activeElement.closest || !document.activeElement.closest('#pp-tbody')){
-    renderPlan();
+  renderCommitments(); updateCommitBadge(); renderLosses(); updateRepBadge();
+  if(document.getElementById('section-reposicao').classList.contains('active')) renderReposicao();
+  if(document.getElementById('section-alertas').classList.contains('active')) renderAlerts();
+  // Não redesenha o que a pessoa está digitando (evita perder o foco)
+  const ae = document.activeElement;
+  const typingIn = sel => ae && ae.closest && ae.closest(sel);
+  if(!typingIn('#pp-tbody')) renderPlan();
+  if(document.getElementById('section-cmv').classList.contains('active') && !typingIn('#rev-tbody') && !typingIn('#cmv-body')){
+    refreshCMVSelect(); renderCMV();
   }
 }
 
 // ─── NAVIGATION ───────────────────────────────────────────────
 const PT = {
   dashboard:'Dashboard',periodos:'Períodos',contagem:'Contagem de Estoque',
-  compras:'Compras',planejamento:'Planejamento Semanal de Caixa',parcelamentos:'Caixa e Compras — Cronograma de Desembolso',cmv:'CMV — Custo das Mercadorias Vendidas',
+  compras:'Compras',perdas:'Perdas e Baixas',reposicao:'Reposição e Validade',
+  planejamento:'Planejamento Semanal de Caixa',parcelamentos:'Caixa e Compras — Cronograma de Desembolso',cmv:'CMV — Custo das Mercadorias Vendidas',
   produtos:'Produtos',fornecedores:'Fornecedores',unidades:'Unidades',alertas:'Alertas de Estoque'
 };
 function go(page){
@@ -1181,19 +1983,22 @@ function go(page){
   const acts = {
     periodos:'<button class="btn btn-primary" onclick="openPeriodModal()">+ Novo Período</button>',
     contagem:'<button class="btn btn-primary" onclick="openCountModal()">+ Nova Contagem</button>',
-    compras:'<button class="btn btn-primary" onclick="openPurchaseModal()">+ Registrar Compra</button>',
+    compras:'<button class="btn btn-primary" onclick="openNotaModal()">+ Registrar Nota de Compra</button>',
+    perdas:'<button class="btn btn-primary" onclick="openLossModal()">+ Registrar Perda</button>',
     planejamento:'<button class="btn btn-primary" onclick="addPlanWeek()">+ Nova Semana</button>',
     parcelamentos:'<button class="btn btn-primary" onclick="openCommitmentModal()">+ Nova Compra Parcelada</button>',
     produtos:'<button class="btn btn-primary" onclick="openProductModal()">+ Novo Produto</button>',
     fornecedores:'<button class="btn btn-primary" onclick="openSupplierModal()">+ Novo Fornecedor</button>'
   };
   document.getElementById('page-actions').innerHTML = acts[page]||'';
-  if(page==='cmv') refreshCMVSelect();
+  if(page==='cmv'){ refreshCMVSelect(); renderCMV(); }
   if(page==='alertas') renderAlerts();
   if(page==='dashboard') renderDashboard();
   if(page==='unidades') renderUnits();
   if(page==='planejamento') renderPlan();
   if(page==='parcelamentos') renderCommitments();
+  if(page==='reposicao') renderReposicao();
+  if(page==='perdas') renderLosses();
 }
 
 // ─── DASHBOARD ────────────────────────────────────────────────
@@ -1201,11 +2006,16 @@ function renderDashboard(){
   const last = S.counts.length ? S.counts[0] : null;
   document.getElementById('d-estoque').textContent = last ? R(countVal(last)) : '—';
   document.getElementById('d-estoque-sub').textContent = last ? 'Contagem em '+fmtDate(last.date) : 'Nenhuma contagem';
-  const closed = S.periods.filter(p=>p.status==='fechado');
+  // Último período ENCERRADO pela data de fim (antes: último criado) e sem a implantação
+  // Último período COMPLETO (abertura + fechamento) pela data de fim — antes: último criado
+  const closed = S.periods.filter(p=>p.type!=='implantacao' && p.openCountId && p.closeCountId)
+    .sort((a,b)=>periodRef(b).localeCompare(periodRef(a)));
   if(closed.length>0){
-    const lp=closed[0]; const cmv=calcCMV(lp.id);
-    document.getElementById('d-cmv').textContent = cmv!==null?R(cmv):'—';
-    document.getElementById('d-cmv-sub').textContent = 'Período: '+lp.label;
+    const d=calcCMVDetail(closed[0].id);
+    document.getElementById('d-cmv').textContent = d.cmv!==null?R(d.cmv):'—';
+    const ms = monthSummary(periodRef(closed[0]).slice(0,7));
+    const pctTxt = d.pct!==null ? ' · '+P(d.pct)+' do faturamento' : (ms.pct!==null ? ' · mês: '+P(ms.pct) : '');
+    document.getElementById('d-cmv-sub').textContent = 'Período: '+closed[0].label + pctTxt;
   }
   const active = S.periods.find(p=>p.status==='aberto');
   if(active){
@@ -1304,7 +2114,7 @@ function renderPlan(){
         <div class="pp-due" id="pp-due-${w.id}"></div>
       </td>
       <td style="text-align:right"><span class="pp-calc" id="pp-final-${w.id}">—</span></td>
-      <td style="text-align:right"><input type="number" step="0.01" class="pp-in" id="pp-cp-${w.id}" value="${w.purchases}" onchange="savePlanRow(${w.id})"></td>
+      <td style="text-align:right"><input type="number" step="0.01" class="pp-in" id="pp-cp-${w.id}" value="${w.purchases}" onchange="savePlanRow(${w.id})"><div class="pp-due" id="pp-sug-${w.id}"></div></td>
       <td style="text-align:right"><span class="pp-calc text-muted" id="pp-commit-${w.id}">—</span>${deltaIco}</td>
       <td><input type="text" class="pp-in-notes" id="pp-nt-${w.id}" value="${(w.notes||'').replace(/"/g,'&quot;')}" placeholder="Ex: Kovalent 3x" onchange="savePlanRow(${w.id})"></td>
       <td><button class="btn btn-sm btn-outline" style="color:var(--danger)" onclick="deletePlanWeek(${w.id})">✕</button></td>
@@ -1355,6 +2165,20 @@ function refreshPlanCalc(){
       }
     }
   });
+  // Reposição sugerida pela aba Reposição e Validade (itens com "pedir até" dentro da semana)
+  try{
+    const weeks = replenishmentWeeks(12);
+    rows.forEach(w => {
+      const el = document.getElementById(`pp-sug-${w.id}`); if(!el) return;
+      const rw = weeks.find(x => x.ws === w.week);
+      if(!rw || rw.sugTot <= 0){ el.textContent=''; el.onclick=null; return; }
+      const bate = Math.abs(rw.sugTot - w.purchases) < 0.01;
+      el.innerHTML = `${bate ? '✓' : '⇣'} Reposição: ${R(rw.sugTot)}`;
+      el.style.color = bate ? 'var(--ok)' : 'var(--indigo)';
+      el.title = rw.sug.map(r => `${r.p.name}: ${r.sugUnits} ${r.p.purchaseUnit}`).join('\n') + (bate ? '' : '\n\nClique para usar este valor em Compras Planejadas');
+      el.onclick = () => { const i = document.getElementById(`pp-cp-${w.id}`); if(i){ i.value = r2(rw.sugTot); savePlanRow(w.id); } };
+    });
+  }catch(e){ console.warn(e); }
   renderPlanStats(rows);
 }
 
@@ -1475,9 +2299,6 @@ async function syncPlanOpenings(){
 // Uma compra parcelada gera N parcelas com data e valor próprios.
 // "Comprometido" = soma das parcelas ainda NÃO pagas.
 // Este módulo é independente do estoque: ele controla dinheiro, não quantidade.
-
-const MESES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
-               'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 
 // ── Cadastro ──
 function openCommitmentModal(){
@@ -1711,14 +2532,20 @@ function renderCommitments(){
   const lb = document.getElementById('cc-list-tbody');
   document.getElementById('cc-count').textContent = S.commits.length;
   if(!S.commits.length){
-    lb.innerHTML = `<tr><td colspan="7"><div class="empty">
+    lb.innerHTML = `<tr><td colspan="8"><div class="empty">
       <div class="ei">💳</div><h3>Nenhuma compra parcelada</h3>
       <p>Cadastre uma compra e o sistema monta o cronograma de parcelas.</p>
       <button class="btn btn-primary" style="margin-top:14px" onclick="openCommitmentModal()">+ Nova Compra Parcelada</button>
     </div></td></tr>`;
     return;
   }
+  const repAll = buildReplenishment();
   lb.innerHTML = S.commits.map(c => {
+    const h = commitmentHorizon(c.id, repAll);
+    const horiz = !h.nItens
+      ? '<span class="text-muted" style="font-size:11px">Sem itens de estoque vinculados</span>'
+      : `<div style="font-size:12px">${h.materialAte ? fmtDate(h.materialAte) : '—'} <span class="text-muted">×</span> ${fmtDate(h.ultimaParcela)}</div>
+         ${h.pagaDepois ? `<span class="badge b-warn" title="O material acaba antes da última parcela">Paga ${h.diasDepois} dias após acabar</span>` : (h.materialAte ? '<span class="badge b-ok">Paga antes de acabar</span>' : '')}`;
     const list  = S.installments.filter(i => i.commitId === c.id);
     const pagas = list.filter(i => i.paid).length;
     const saldo = sumAmt(list.filter(i => !i.paid));
@@ -1733,6 +2560,7 @@ function renderCommitments(){
         <div class="cc-bar"><span style="width:${pct}%"></span></div>
         <span style="font-size:11px;color:var(--muted)">${pagas}/${list.length}</span>
       </div></td>
+      <td>${horiz}</td>
       <td><button class="btn btn-sm btn-outline" style="color:var(--danger)" onclick="deleteCommitment(${c.id})">✕</button></td>
     </tr>`;
   }).join('');
@@ -1747,16 +2575,38 @@ function toggleMonth(m){
 }
 
 // ─── PERIODS ──────────────────────────────────────────────────
+// Regra P1: implantação só uma vez (primeira contagem). Depois, períodos semanais
+// encadeados: o fechamento da semana N é a abertura da semana N+1 (computeChainLinks).
 function openPeriodModal(){
-  document.getElementById('p-type').value='semanal';
-  document.getElementById('p-start').value=today();
-  document.getElementById('p-end').value='';
+  const temImp = !!implantacaoPeriod();
+  const sel = document.getElementById('p-type');
+  sel.innerHTML = '<option value="semanal">Semanal</option><option value="mensal">Mensal</option>'
+    + (temImp ? '' : '<option value="implantacao">Implantação — Estoque Inicial</option>');
+  sel.value = (!temImp && !S.periods.length) ? 'implantacao' : 'semanal';
+  const nx = suggestNextWeek();
+  document.getElementById('p-start').value = nx.start;
+  document.getElementById('p-end').value = nx.end;
   togglePeriodForm(); openM('m-period');
 }
 function togglePeriodForm(){
   const t=document.getElementById('p-type').value;
   document.getElementById('p-imp-note').style.display=t==='implantacao'?'flex':'none';
   document.getElementById('p-end-grp').style.display=t==='implantacao'?'none':'block';
+  // Mostra de onde virá a abertura do novo período
+  const note=document.getElementById('p-chain-note'), txt=document.getElementById('p-chain-text');
+  if(t==='implantacao'){ note.style.display='none'; return; }
+  const start=document.getElementById('p-start').value;
+  const prev=S.periods.filter(p=>p.type!=='implantacao' && p.start<start).sort((a,b)=>b.start.localeCompare(a.start))[0];
+  const imp=implantacaoPeriod();
+  if(prev){
+    const cc=prev.closeCountId?S.counts.find(c=>c.id===prev.closeCountId):null;
+    txt.innerHTML = cc ? `A abertura será a contagem de fechamento de <strong>${prev.label}</strong> (${fmtDate(cc.date)}) — não precisa contar de novo.`
+                       : `A abertura será preenchida sozinha quando <strong>${prev.label}</strong> tiver a contagem de fechamento.`;
+  } else if(imp){
+    txt.innerHTML = imp.openCountId ? `A abertura será a contagem de <strong>implantação</strong> (${fmtDate(imp.start)}).`
+                                    : `A abertura será a contagem de implantação, assim que ela for feita.`;
+  } else { txt.innerHTML = 'Primeiro período sem implantação: faça uma contagem de abertura.'; }
+  note.style.display='flex';
 }
 async function savePeriod(){
   const type=document.getElementById('p-type').value;
@@ -1764,11 +2614,15 @@ async function savePeriod(){
   const end=document.getElementById('p-end').value;
   if(!start){alert('Informe a data de início.');return;}
   if(type!=='implantacao'&&!end){alert('Informe a data de fim.');return;}
+  if(type!=='implantacao'&&end<start){alert('A data de fim não pode ser antes do início.');return;}
+  if(type==='implantacao' && implantacaoPeriod()){ alert('Já existe uma implantação. Ela só é usada na primeira contagem — crie um período semanal.'); return; }
+  const sobrepoe=S.periods.find(p=>p.type===type && p.type!=='implantacao' && p.start<=end && (p.end||p.start)>=start);
+  if(sobrepoe && !confirm(`Este período se sobrepõe a "${sobrepoe.label}". Criar mesmo assim?`)) return;
   const lblMap={semanal:'Semanal',mensal:'Mensal',implantacao:'Implantação'};
   let label;
   if(type==='implantacao') label='Implantação — '+fmtDate(start);
   else if(type==='semanal') label='Semana '+fmtDate(start)+' – '+fmtDate(end);
-  else { const d=new Date(start+'T12:00:00'); label=d.toLocaleString('pt-BR',{month:'long',year:'numeric'}); label=label.charAt(0).toUpperCase()+label.slice(1); }
+  else { const d=parseISO(start); label=d.toLocaleString('pt-BR',{month:'long',year:'numeric'}); label=label.charAt(0).toUpperCase()+label.slice(1); }
   setLoading(true);
   const {error}=await sb.from('periods').insert({type,type_label:lblMap[type],label,start_date:start,end_date:type==='implantacao'?null:end,status:'aberto'});
   if(error){setLoading(false);alert('Erro: '+error.message);return;}
@@ -1785,18 +2639,22 @@ async function closePeriod(id){
   toast('Período fechado!'); await loadAll(); setLoading(false);
 }
 async function deletePeriod(id){
-  if(!confirm('Excluir este período e todos os seus dados?')) return;
+  const p=S.periods.find(x=>x.id===id);
+  const usado = p && p.closeCountId && S.periods.some(o=>o.id!==id && o.openCountId===p.closeCountId);
+  if(!confirm('Excluir este período e todos os seus dados?' + (usado ? '\n\nAtenção: a contagem de fechamento dele é a abertura do período seguinte.' : ''))) return;
   setLoading(true);
   await sb.from('periods').delete().eq('id',id);
   toast('Período excluído.'); await loadAll(); setLoading(false);
 }
 function renderPeriods(){
   const tb=document.getElementById('periodos-tbody');
-  if(!S.periods.length){tb.innerHTML='<tr><td colspan="9"><div class="empty"><div class="ei">📅</div><h3>Nenhum período</h3></div></td></tr>';return;}
-  tb.innerHTML=S.periods.map(p=>{
+  if(!S.periods.length){tb.innerHTML='<tr><td colspan="9"><div class="empty"><div class="ei">📅</div><h3>Nenhum período</h3><p>Comece pela implantação (estoque inicial).</p></div></td></tr>';return;}
+  const ordered=[...S.periods].sort((a,b)=>(b.start||'').localeCompare(a.start||'') || b.id-a.id);
+  tb.innerHTML=ordered.map(p=>{
     const oc=p.openCountId?S.counts.find(c=>c.id===p.openCountId):null;
     const cc=p.closeCountId?S.counts.find(c=>c.id===p.closeCountId):null;
-    const cmv=p.status==='fechado'?calcCMV(p.id):null;
+    const d=calcCMVDetail(p.id);
+    const herdada = oc && oc.periodId!==p.id;   // abertura veio do fechamento anterior / implantação
     let acts=`<button class="btn btn-sm btn-outline" onclick="editPeriod(${p.id})">Editar</button> `;
     if(p.status==='aberto'){
       if(p.openCountId&&(p.type==='implantacao'||p.closeCountId))
@@ -1808,10 +2666,10 @@ function renderPeriods(){
       <td><span class="badge b-primary">${p.typeLabel}</span></td>
       <td>${fmtDate(p.start)}</td><td>${p.end?fmtDate(p.end):'—'}</td>
       <td><span class="badge ${p.status==='aberto'?'b-ok':'b-gray'}">${p.status==='aberto'?'Ativo':'Fechado'}</span></td>
-      <td>${oc?`<span class="badge b-ok">✓ ${fmtDate(oc.date)}</span>`:'<span class="badge b-warn">Pendente</span>'}</td>
+      <td>${oc?`<span class="badge b-ok" title="${herdada?'Mesma contagem do fechamento anterior':''}">✓ ${fmtDate(oc.date)}${herdada?' 🔗':''}</span>`:'<span class="badge b-warn">Pendente</span>'}</td>
       <td>${cc?`<span class="badge b-ok">✓ ${fmtDate(cc.date)}</span>`:(p.type==='implantacao'?'<span class="badge b-gray">N/A</span>':'<span class="badge b-warn">Pendente</span>')}</td>
-      <td class="mono fw7">${cmv!==null?R(cmv):'—'}</td>
-      <td>${acts}</td>
+      <td class="mono fw7">${d.implantacao?'<span class="badge b-gray">N/A</span>':(d.cmv!==null?R(d.cmv)+(d.pct!==null?`<div style="font-size:10.5px;color:var(--muted)">${P(d.pct)}</div>`:''):'—')}</td>
+      <td style="white-space:nowrap">${acts}</td>
     </tr>`;
   }).join('');
 }
@@ -1854,26 +2712,39 @@ function confirmReplaceCountLink(period, jsField, newCountId){
 }
 
 // ─── STOCK COUNTS ─────────────────────────────────────────────
+function num(v){ const n=parseFloat(String(v??'').replace(',','.')); return isNaN(n)?0:n; }
 function openCountModal(){
   // Reseta modo edição
   document.getElementById('cnt-edit-id').value='';
   document.getElementById('cnt-modal-title').textContent='Nova Contagem de Estoque';
   document.getElementById('cnt-save-btn').textContent='Salvar Contagem';
-  const ps=S.periods.filter(p=>p.status==='aberto');
+  // Períodos abertos que ainda precisam de contagem (fechamento, ou abertura/implantação sem contagem)
+  const ps=S.periods.filter(p=>p.status==='aberto' && (p.type==='implantacao' ? !p.openCountId : (!p.openCountId || !p.closeCountId)))
+    .sort((a,b)=>a.start.localeCompare(b.start));
   document.getElementById('cnt-period').innerHTML='<option value="">— Selecione —</option>'+ps.map(p=>`<option value="${p.id}">${p.label}</option>`).join('');
   document.getElementById('cnt-date').value=today();
-  buildCountTable(); openM('m-count');
+  buildCountTable();
+  if(ps.length===1){ document.getElementById('cnt-period').value=ps[0].id; onCountPeriodChange(); }
+  else toggleExpCol(null);
+  openM('m-count');
+}
+function toggleExpCol(period){
+  const on = !!(period && period.type==='implantacao');
+  document.getElementById('cnt-table').classList.toggle('show-exp', on);
+  document.getElementById('cnt-exp-note').style.display = on ? 'flex' : 'none';
 }
 function onCountPeriodChange(){
   const pid=parseInt(document.getElementById('cnt-period').value);
-  const p=S.periods.find(x=>x.id===pid); if(!p) return;
+  const p=S.periods.find(x=>x.id===pid); toggleExpCol(p||null); if(!p) return;
   const ts=document.getElementById('cnt-type');
   if(p.type==='implantacao'){
     ts.innerHTML='<option value="abertura">Implantação (Estoque Inicial)</option>';
   } else {
     const h=!!p.openCountId;
-    ts.innerHTML=`<option value="abertura"${h?' disabled':''}>Abertura${h?' (✓ feita)':''}</option><option value="fechamento"${!h?' disabled':''}>Fechamento${!h?' (aguarda abertura)':''}</option>`;
+    const herdada = h && (S.counts.find(c=>c.id===p.openCountId)||{}).periodId!==p.id;
+    ts.innerHTML=`<option value="abertura"${h?' disabled':''}>Abertura${h?(herdada?' (✓ = fechamento anterior)':' (✓ feita)'):''}</option><option value="fechamento"${!h?' disabled':''}>Fechamento${!h?' (aguarda abertura)':''}</option>`;
     ts.value=h?'fechamento':'abertura';
+    if(h && p.end) document.getElementById('cnt-date').value = (today()>p.end ? p.end : today());
   }
 }
 function buildCountTable(){
@@ -1895,15 +2766,16 @@ function buildCountTable(){
         ${p.subUnitQty>0 ? `<div style="font-size:9.5px;color:var(--indigo)">≈ ${R(p.subUnitCost)}/${p.subUnitLabel||'sub-un.'}</div>` : ''}
       </td>
       <td style="text-align:center">
-        <input type="number" class="cnt-input" id="cf-${p.id}" min="0" value="0" oninput="updRow(${p.id})">
+        <input type="number" class="cnt-input" id="cf-${p.id}" min="0" step="any" value="0" oninput="updRow(${p.id})">
         <div style="font-size:9px;color:var(--muted);margin-top:2px">${p.purchaseUnit}</div>
       </td>
       <td style="text-align:center">
-        <input type="number" class="cnt-input" id="ca-${p.id}" min="0" value="0" oninput="updRow(${p.id})">
+        <input type="number" class="cnt-input" id="ca-${p.id}" min="0" step="any" value="0" oninput="updRow(${p.id})">
         <div style="font-size:9px;color:var(--muted);margin-top:2px">${p.stockUnit}</div>
       </td>
       <td style="text-align:center;font-weight:700" id="ct-${p.id}">0</td>
       <td style="text-align:right;font-family:'DM Mono',monospace" id="cv-${p.id}">${R(0)}</td>
+      <td class="cnt-exp-col">${p.tracksExpiry?`<input type="date" class="nt-in" id="ce-${p.id}" style="width:140px">`:'<span class="text-muted" style="font-size:11px">—</span>'}</td>
     </tr>`;
   }).join('');
   updTotals();
@@ -1912,27 +2784,23 @@ function filterCntTable(cat,btn){
   document.querySelectorAll('#cnt-filters .fpill').forEach(b=>b.classList.remove('active')); btn.classList.add('active');
   document.querySelectorAll('#cnt-tbody tr').forEach(r=>{r.style.display=(!cat||r.dataset.cat===cat)?'':'none';});
 }
+// Quantidades aceitam decimais (bug 3: antes parseInt truncava 0,5 L para 0)
+function rowTotal(p){
+  const closed=num(document.getElementById('cf-'+p.id)?.value); // UNIDADE DE COMPRA (pacotes/caixas fechados)
+  const open=num(document.getElementById('ca-'+p.id)?.value);   // UNIDADE DE ESTOQUE (solto/avulso)
+  return {closed, open, total:r2((closed*(p.convFactor||1)+open)*1000)/1000};
+}
 function updRow(pid){
-  const closed=parseInt(document.getElementById('cf-'+pid)?.value)||0; // em UNIDADE DE COMPRA (pacotes/caixas fechados)
-  const open=parseInt(document.getElementById('ca-'+pid)?.value)||0;   // em UNIDADE DE ESTOQUE (solto/avulso)
-  const p=S.products.find(x=>x.id===pid);
-  const factor=p?(p.convFactor||1):1;
-  const total=(closed*factor)+open; // total sempre em UNIDADE DE ESTOQUE
-  document.getElementById('ct-'+pid).textContent=total;
-  // Usa unit_cost (custo por UNIDADE DE ESTOQUE) — agora sempre correto
-  document.getElementById('cv-'+pid).textContent=R(total*(p?p.cost:0));
+  const p=S.products.find(x=>x.id===pid); if(!p) return;
+  const t=rowTotal(p);
+  document.getElementById('ct-'+pid).textContent=N(t.total,3);
+  document.getElementById('cv-'+pid).textContent=R(t.total*p.cost);
   updTotals();
 }
 function updTotals(){
   let q=0,v=0;
-  S.products.filter(p=>p.active).forEach(p=>{
-    const closed=parseInt(document.getElementById('cf-'+p.id)?.value)||0;
-    const open=parseInt(document.getElementById('ca-'+p.id)?.value)||0;
-    const factor=p.convFactor||1;
-    const total=(closed*factor)+open;
-    q+=total; v+=total*p.cost;  // p.cost = custo por unidade de estoque
-  });
-  document.getElementById('cnt-tot-qty').textContent=q;
+  S.products.filter(p=>p.active).forEach(p=>{ const t=rowTotal(p); q+=t.total; v+=t.total*p.cost; });
+  document.getElementById('cnt-tot-qty').textContent=N(q,3);
   document.getElementById('cnt-tot-val').textContent=R(v);
 }
 async function saveCount(){
@@ -1947,6 +2815,11 @@ async function saveCount(){
 
   // Validação 4: data fora do intervalo do período — avisa, não bloqueia
   if(!confirmDateWithinPeriod(targetPeriod, date)) return;
+  // Fechamento não pode ser antes da abertura
+  if(type==='fechamento' && targetPeriod.openCountId){
+    const oc=S.counts.find(c=>c.id===targetPeriod.openCountId);
+    if(oc && date<oc.date){ alert(`A contagem de fechamento (${fmtDate(date)}) não pode ser antes da abertura (${fmtDate(oc.date)}).`); return; }
+  }
 
   const jsField=(type==='fechamento')?'closeCountId':'openCountId';
   const dbField=(type==='fechamento')?'close_count_id':'open_count_id';
@@ -1960,21 +2833,20 @@ async function saveCount(){
     let countId;
     if(editId){
       countId=parseInt(editId);
-
-      // Correção 1: antes de aplicar as mudanças, limpa qualquer período (diferente do de
-      // destino) que ainda aponte pra essa contagem — evita períodos "presos" quando a
-      // contagem migra de período ao ser editada.
-      const oldPeriods = S.periods.filter(p =>
-        p.id !== periodId && (p.openCountId === countId || p.closeCountId === countId)
-      );
-      for(const op of oldPeriods){
-        const clearUpdates = {};
-        if(op.openCountId === countId) clearUpdates.open_count_id = null;
-        if(op.closeCountId === countId) clearUpdates.close_count_id = null;
-        const {error:eClear}=await sb.from('periods').update(clearUpdates).eq('id',op.id);
-        if(eClear) throw eClear;
+      const original=S.counts.find(c=>c.id===countId);
+      // Correção 1 (mantida): se a contagem MUDOU de período, limpa os vínculos antigos.
+      // Se continua no mesmo período, os vínculos são preservados — inclusive a abertura do
+      // período seguinte, que é a mesma contagem (regra P1).
+      if(original && original.periodId!==periodId){
+        const oldPeriods = S.periods.filter(p => p.id !== periodId && (p.openCountId === countId || p.closeCountId === countId));
+        for(const op of oldPeriods){
+          const clearUpdates = {};
+          if(op.openCountId === countId) clearUpdates.open_count_id = null;
+          if(op.closeCountId === countId) clearUpdates.close_count_id = null;
+          const {error:eClear}=await sb.from('periods').update(clearUpdates).eq('id',op.id);
+          if(eClear) throw eClear;
+        }
       }
-
       // Edição: atualiza o registro e reinsere os itens
       const {error:e0}=await sb.from('stock_counts').update({period_id:periodId,type,date}).eq('id',countId);
       if(e0) throw e0;
@@ -1987,51 +2859,54 @@ async function saveCount(){
       countId=cnt.id;
     }
 
+    const isImp = targetPeriod.type==='implantacao';
     const items=S.products.filter(p=>p.active).map(p=>{
-      const f=parseInt(document.getElementById('cf-'+p.id)?.value)||0; // pacotes/caixas fechados (unid. compra)
-      const a=parseInt(document.getElementById('ca-'+p.id)?.value)||0; // solto (unid. estoque)
-      const factor=p.convFactor||1;
-      const total=(f*factor)+a; // total sempre em unidade de estoque
-      return {count_id:countId,product_id:p.id,qty_closed:f,qty_open:a,total,cost_snapshot:p.cost};
+      const t=rowTotal(p); // total sempre em unidade de estoque
+      const row={count_id:countId,product_id:p.id,qty_closed:t.closed,qty_open:t.open,total:t.total,cost_snapshot:p.cost};
+      const exp=isImp ? (document.getElementById('ce-'+p.id)?.value||'') : '';
+      if(exp) row.expiry_date=exp;   // validade só na implantação (o resto vem das compras)
+      return row;
     });
     const {error:e2}=await sb.from('count_items').insert(items);
     if(e2) throw e2;
 
-    // Correções 1 e 2: re-sincroniza o vínculo do período com a contagem — na criação
-    // e na edição, sempre igualando o campo (abertura/fechamento) ao countId atual — e
-    // verifica erro do update, que antes ficava silencioso.
+    // Re-sincroniza o vínculo do período com a contagem (verificando o erro)
     const {error:eField}=await sb.from('periods').update({[dbField]:countId}).eq('id',periodId);
     if(eField) throw eField;
 
     closeM('m-count');
     toast(editId?'Contagem atualizada!':'Contagem salva!');
-    await loadAll();
+    await loadAll();   // loadAll encadeia a abertura do período seguinte (regra P1)
   } catch(e){alert('Erro: '+e.message);}
   finally{setLoading(false);}
 }
 async function deleteCount(id){
-  if(!confirm('Excluir esta contagem?')) return;
-  const cnt=S.counts.find(c=>c.id===id);
-  if(cnt){
-    const p=S.periods.find(x=>x.id===cnt.periodId);
-    if(p){
-      if(p.openCountId===id) await sb.from('periods').update({open_count_id:null}).eq('id',p.id);
-      if(p.closeCountId===id) await sb.from('periods').update({close_count_id:null}).eq('id',p.id);
-    }
-  }
+  const usos=S.periods.filter(p=>p.openCountId===id || p.closeCountId===id);
+  if(!confirm('Excluir esta contagem?' + (usos.length>1 ? `\n\nEla é usada em ${usos.length} períodos: ${usos.map(p=>p.label).join(', ')}.` : ''))) return;
   setLoading(true);
+  // Limpa TODOS os períodos que apontam para ela (fechamento de um e abertura do seguinte)
+  for(const p of usos){
+    const upd={};
+    if(p.openCountId===id) upd.open_count_id=null;
+    if(p.closeCountId===id) upd.close_count_id=null;
+    await sb.from('periods').update(upd).eq('id',p.id);
+  }
   await sb.from('stock_counts').delete().eq('id',id);
   toast('Contagem excluída.'); await loadAll(); setLoading(false);
 }
 function renderCounts(){
   const tb=document.getElementById('contagem-tbody');
   if(!S.counts.length){tb.innerHTML='<tr><td colspan="6"><div class="empty"><div class="ei">📋</div><h3>Nenhuma contagem</h3></div></td></tr>';return;}
-  const lbls={abertura:'Abertura',fechamento:'Fechamento',implantacao:'Implantação'};
   tb.innerHTML=S.counts.map(c=>{
     const p=S.periods.find(x=>x.id===c.periodId);
+    const usos=[];
+    S.periods.forEach(x=>{
+      if(x.closeCountId===c.id) usos.push(`<span class="badge b-ok">Fecha ${x.label}</span>`);
+      if(x.openCountId===c.id) usos.push(`<span class="badge ${x.type==='implantacao'?'b-warn':'b-primary'}">${x.type==='implantacao'?'Implantação':'Abre '+x.label}</span>`);
+    });
     return `<tr>
       <td>${fmtDate(c.date)}</td><td>${p?p.label:'—'}</td>
-      <td><span class="badge ${c.type==='fechamento'?'b-ok':'b-primary'}">${lbls[c.type]||c.type}</span></td>
+      <td style="display:flex;flex-wrap:wrap;gap:4px">${usos.join(' ')||'<span class="badge b-gray">Sem vínculo</span>'}</td>
       <td>${c.items.filter(i=>i.total>0).length} itens</td>
       <td class="mono fw6 text-primary">${R(countVal(c))}</td>
       <td style="white-space:nowrap"><button class="btn btn-sm btn-outline" onclick="editCount(${c.id})">Editar</button> <button class="btn btn-sm btn-outline" style="color:var(--danger);margin-left:4px" onclick="deleteCount(${c.id})">✕</button></td>
@@ -2040,41 +2915,33 @@ function renderCounts(){
 }
 
 // ─── PURCHASES ────────────────────────────────────────────────
-function openPurchaseModal(){
-  // Reseta modo edição
-  document.getElementById('pu-edit-id').value='';
-  document.getElementById('pu-modal-title').textContent='Registrar Compra';
-  document.getElementById('pu-save-btn').textContent='Registrar';
-  document.getElementById('pu-date').value=today();
-  const ps=S.periods.filter(p=>p.status==='aberto');
-  document.getElementById('pu-period').innerHTML='<option value="">— Selecione —</option>'+ps.map(p=>`<option value="${p.id}">${p.label}</option>`).join('');
-  document.getElementById('pu-product').innerHTML='<option value="">— Selecione —</option>'+
-    S.products.filter(p=>p.active).sort((a,b)=>a.name.localeCompare(b.name))
-    .map(p=>`<option value="${p.id}">${p.name} (${p.cat})</option>`).join('');
-  document.getElementById('pu-supplier').innerHTML='<option value="">— Selecione —</option>'+S.suppliers.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
-  document.getElementById('pu-qty-lbl').textContent='Quantidade *';
-  document.getElementById('pu-cost-lbl').textContent='Custo Unitário (R$) *';
-  document.getElementById('pu-uom-box').style.display='none';
-  document.getElementById('pu-derived-row').style.display='none';
-  document.getElementById('pu-qty').value=1;
-  document.getElementById('pu-cost').value=0;
-  document.getElementById('pu-total').value='R$ 0,00';
-  openM('m-purchase');
+// Regra C2: a data da compra é a data de RECEBIMENTO (quando entra na prateleira).
+// Regra C1: o total da compra inclui o frete rateado da nota; bonificação entra com custo zero.
+let puEditFreight = 0, puEditBonus = false;
+
+// Sugere o período aberto que contém a data (compra, perda)
+function autoPeriodFor(dateId, selId){
+  const d=document.getElementById(dateId).value; if(!d) return;
+  const p=periodForDate(d); const sel=document.getElementById(selId);
+  if(p && [...sel.options].some(o=>parseInt(o.value)===p.id)) sel.value=p.id;
 }
+function openPeriodOptions(includeId){
+  return '<option value="">— Selecione —</option>'+S.periods
+    .filter(p=>p.type!=='implantacao' && (p.status==='aberto' || p.id===includeId))
+    .sort((a,b)=>b.start.localeCompare(a.start))
+    .map(p=>`<option value="${p.id}">${p.label}${p.status==='fechado'?' (fechado)':''}</option>`).join('');
+}
+
+function openPurchaseModal(){ openNotaModal(); }   // registro novo é sempre por nota
 
 function onPurchaseProduct(){
   const pid=parseInt(document.getElementById('pu-product').value);
   const p=S.products.find(x=>x.id===pid);
   if(!p) return;
-
-  // Atualiza labels com unidade de compra
   document.getElementById('pu-qty-lbl').textContent=`Quantidade (em ${p.purchaseUnit}) *`;
   document.getElementById('pu-cost-lbl').textContent=`Custo por ${p.purchaseUnit} (R$) *`;
-
-  // Pré-preenche com último custo de compra conhecido
+  document.getElementById('pu-exp-lbl').textContent=p.tracksExpiry?'Validade *':'Validade';
   document.getElementById('pu-cost').value = p.purchaseCost || 0;
-
-  // Mostra contexto de conversão se fator > 1
   const uomBox = document.getElementById('pu-uom-box');
   const derivedRow = document.getElementById('pu-derived-row');
   if(p.convFactor > 1){
@@ -2088,8 +2955,6 @@ function onPurchaseProduct(){
     uomBox.style.display = 'none';
     derivedRow.style.display = 'none';
   }
-
-  // Fornecedor padrão
   if(p.supps.length) document.getElementById('pu-supplier').value=p.supps[0];
   calcPuTotal();
 }
@@ -2097,11 +2962,10 @@ function onPurchaseProduct(){
 function calcPuTotal(){
   const pid=parseInt(document.getElementById('pu-product').value);
   const p=S.products.find(x=>x.id===pid);
-  const q=parseFloat(document.getElementById('pu-qty').value)||0;
-  const c=parseFloat(document.getElementById('pu-cost').value)||0;
-  document.getElementById('pu-total').value=R(q*c);
-
-  // Atualiza custo por unidade de estoque derivado
+  const q=num(document.getElementById('pu-qty').value);
+  const c=num(document.getElementById('pu-cost').value);
+  document.getElementById('pu-total').value=R(q*c+puEditFreight);
+  document.getElementById('pu-freight-lbl').textContent = puEditFreight>0 ? `(inclui ${R(puEditFreight)} de frete rateado)` : '';
   if(p && p.convFactor > 1){
     const stockCost = p.convFactor > 0 ? c / p.convFactor : 0;
     document.getElementById('pu-derived-val').textContent = R(stockCost) + ' / ' + p.stockUnit;
@@ -2110,56 +2974,53 @@ function calcPuTotal(){
   }
 }
 
+// Atualiza o custo atual do produto — só se a compra for a mais recente dele (corrige bug 4)
+async function maybeUpdateProductCost(prodId, date, cost, purchaseId){
+  if(!(cost>0)) return;
+  if(!isLatestPurchase(prodId, date, purchaseId)) return;
+  const prod=S.products.find(x=>x.id===prodId); const conv=prod?prod.convFactor:1;
+  await sb.from('products').update({unit_cost: cost/conv, purchase_unit_cost: cost}).eq('id', prodId);
+}
+
+// Edição de uma linha de compra já registrada
 async function savePurchase(){
   const periodId=parseInt(document.getElementById('pu-period').value);
   const prodId=parseInt(document.getElementById('pu-product').value);
   const suppId=parseInt(document.getElementById('pu-supplier').value)||null;
   const date=document.getElementById('pu-date').value;
-  const qty=parseFloat(document.getElementById('pu-qty').value)||0;
-  const cost=parseFloat(document.getElementById('pu-cost').value)||0; // custo por UNIDADE DE COMPRA
+  const qty=num(document.getElementById('pu-qty').value);
+  const cost=num(document.getElementById('pu-cost').value); // custo por UNIDADE DE COMPRA
+  const expiry=document.getElementById('pu-expiry').value||null;
+  const lot=document.getElementById('pu-lot').value.trim()||null;
+  const invoice=document.getElementById('pu-invoice').value.trim()||null;
 
   if(!periodId||isNaN(periodId)){alert('Selecione um período.');return;}
   if(!prodId||isNaN(prodId)){alert('Selecione um produto.');return;}
-  if(!date){alert('Informe a data.');return;}
+  if(!date){alert('Informe a data de recebimento.');return;}
   if(qty<=0){alert('Quantidade deve ser maior que zero.');return;}
+  const prod=S.products.find(x=>x.id===prodId);
+  if(prod && prod.tracksExpiry && !expiry){ alert(`${prod.name} controla validade: informe a data de validade.`); return; }
 
-  // Validação 4: data fora do intervalo do período — avisa, não bloqueia
   const purchasePeriod = S.periods.find(x=>x.id===periodId);
   if(!confirmDateWithinPeriod(purchasePeriod, date)) return;
 
-  const prod = S.products.find(x=>x.id===prodId);
-  const convFactor = prod ? prod.convFactor : 1;
-  // CÁLCULO CORRETO: custo por unidade de estoque = custo_compra / fator
-  const stockUnitCost = cost > 0 ? cost / convFactor : 0;
-
-  const editId = document.getElementById('pu-edit-id').value;
+  const editId = parseInt(document.getElementById('pu-edit-id').value)||null;
+  const row={ period_id:periodId, product_id:prodId, supplier_id:suppId, date, qty, cost,
+    total: r2(qty*cost + puEditFreight), expiry_date:expiry, lot_code:lot, invoice_number:invoice };
   setLoading(true);
   let error;
-  if(editId){
-    ({error} = await sb.from('purchases').update({
-      period_id:periodId, product_id:prodId, supplier_id:suppId,
-      date, qty, cost, total: qty * cost
-    }).eq('id', parseInt(editId)));
-  } else {
-    ({error} = await sb.from('purchases').insert({
-      period_id:periodId, product_id:prodId, supplier_id:suppId,
-      date, qty, cost, total: qty * cost
-    }));
-  }
-  if(!error && cost > 0){
-    await sb.from('products').update({
-      unit_cost: stockUnitCost,
-      purchase_unit_cost: cost
-    }).eq('id', prodId);
-  }
+  if(editId) ({error} = await sb.from('purchases').update(row).eq('id', editId));
+  else       ({error} = await sb.from('purchases').insert(row));
   if(error){setLoading(false);alert('Erro: '+error.message);return;}
+  await maybeUpdateProductCost(prodId, date, cost, editId);
   closeM('m-purchase');
   toast(editId ? 'Compra atualizada!' : 'Compra registrada!');
   await loadAll(); setLoading(false);
 }
 
 async function deletePurchase(id){
-  if(!confirm('Excluir esta compra?')) return;
+  const c=S.purchases.find(x=>x.id===id);
+  if(!confirm('Excluir esta compra?' + (c && c.commitmentId ? '\n\nEla faz parte de uma compra parcelada: as parcelas em Caixa e Compras NÃO são alteradas.' : ''))) return;
   setLoading(true);
   await sb.from('purchases').delete().eq('id',id);
   toast('Compra excluída.'); await loadAll(); setLoading(false);
@@ -2168,8 +3029,9 @@ async function deletePurchase(id){
 function renderPurchases(){
   const tb=document.getElementById('compras-tbody');
   if(!S.purchases.length){
-    tb.innerHTML='<tr><td colspan="9"><div class="empty"><div class="ei">🛒</div><h3>Nenhuma compra</h3></div></td></tr>';return;
+    tb.innerHTML='<tr><td colspan="12"><div class="empty"><div class="ei">🛒</div><h3>Nenhuma compra</h3><p>Registre uma nota de compra.</p></div></td></tr>';return;
   }
+  const t=today();
   tb.innerHTML=S.purchases.map(c=>{
     const prod=S.products.find(p=>p.id===c.prodId);
     const supp=S.suppliers.find(s=>s.id===c.suppId);
@@ -2177,78 +3039,319 @@ function renderPurchases(){
     const convFactor = prod ? prod.convFactor : 1;
     const purchaseUnit = prod ? prod.purchaseUnit : 'un.';
     const stockUnit = prod ? prod.stockUnit : 'un.';
-    // Custo por unidade de estoque inferido da compra
     const stockCostFromPurchase = cost_per_stock(c.cost, convFactor);
+    const expCls = c.expiry ? (c.expiry<t ? 'b-danger' : (c.expiry<=addDays(t,60) ? 'b-warn' : 'b-gray')) : '';
     return `<tr>
       <td>${fmtDate(c.date)}</td>
       <td>
         <strong>${prod?prod.name:'—'}</strong>
         ${convFactor>1?`<div style="font-size:10px;margin-top:1px"><span class="uom-pill">1 ${purchaseUnit} = ${convFactor} ${stockUnit}</span></div>`:''}
+        ${c.isBonus?'<span class="badge b-indigo" style="margin-top:2px">Bonificação</span>':''}
       </td>
       <td>${supp?supp.name:'—'}</td>
-      <td class="mono">${c.qty} <span style="font-size:11px;color:var(--muted)">${purchaseUnit}</span></td>
+      <td class="mono">${N(c.qty,3)} <span style="font-size:11px;color:var(--muted)">${purchaseUnit}</span></td>
       <td class="mono">${R(c.cost)}<span style="font-size:10px;color:var(--muted)">/${purchaseUnit}</span></td>
       <td class="mono ${convFactor>1?'text-primary':'text-muted'}">${R(stockCostFromPurchase)}<span style="font-size:10px">/${stockUnit}</span></td>
+      <td class="mono text-muted">${c.freight?R(c.freight):'—'}</td>
       <td class="mono fw6 text-primary">${R(c.total)}</td>
+      <td>${c.expiry?`<span class="badge ${expCls}">${fmtDate(c.expiry)}</span>`:'<span class="text-muted">—</span>'}${c.lotCode?`<div class="rp-tag">Lote ${c.lotCode}</div>`:''}</td>
+      <td style="font-size:12px">${c.invoice||'—'}${c.commitmentId?'<div><span class="badge b-indigo">Parcelada</span></div>':''}</td>
       <td style="font-size:12px;color:var(--muted)">${per?per.label:'—'}</td>
       <td style="white-space:nowrap"><button class="btn btn-sm btn-outline" onclick="editPurchase(${c.id})">Editar</button> <button class="btn btn-sm btn-outline" style="color:var(--danger);margin-left:4px" onclick="deletePurchase(${c.id})">✕</button></td>
     </tr>`;
   }).join('');
 }
 
-// ─── CMV ──────────────────────────────────────────────────────
-function countVal(cnt){
-  return cnt.items.reduce((s,i)=>{
-    // snap = custo por unidade de ESTOQUE (garantido pela nova lógica)
-    const snap=i.snap!==undefined?i.snap:(S.products.find(p=>p.id===i.pid)||{cost:0}).cost;
-    return s+i.total*snap;
-  },0);
+// ─── NOTA DE COMPRA (vários itens) ────────────────────────────
+// Regra D2: um lançamento por nota. Cada item vira uma linha em purchases (estoque/CMV) e,
+// se parcelada, a nota vira uma compra parcelada com cronograma (commitments).
+let ntSeq = 0;
+function openNotaModal(){
+  document.getElementById('nt-date').value=today();
+  document.getElementById('nt-period').innerHTML=openPeriodOptions(null);
+  autoPeriodFor('nt-date','nt-period');
+  document.getElementById('nt-supplier').innerHTML='<option value="">— Selecione —</option>'+S.suppliers.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+  document.getElementById('nt-invoice').value='';
+  document.getElementById('nt-freight').value=0;
+  document.getElementById('nt-parc').checked=false;
+  document.getElementById('nt-n').value=2;
+  document.getElementById('nt-first').value=addDays(today(),30);
+  document.getElementById('nt-interval').value='month';
+  document.getElementById('nt-lines').innerHTML='';
+  toggleNotaParc(); addNotaLine(); openM('m-nota');
 }
-function calcCMV(periodId){
-  const p=S.periods.find(x=>x.id===periodId); if(!p) return null;
-  const oc=p.openCountId?S.counts.find(c=>c.id===p.openCountId):null; if(!oc) return null;
-  if(p.type!=='implantacao'&&!p.closeCountId) return null;
-  const cc=p.closeCountId?S.counts.find(c=>c.id===p.closeCountId):null;
-  // pv = total de dinheiro gasto em compras no período (correto para CMV)
-  const pv=S.purchases.filter(x=>x.periodId===periodId).reduce((s,x)=>s+x.total,0);
-  return countVal(oc)+pv-(cc?countVal(cc):0);
+function addNotaLine(){
+  const k=++ntSeq;
+  const opts='<option value="">— Produto —</option>'+S.products.filter(p=>p.active).sort((a,b)=>a.name.localeCompare(b.name))
+    .map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
+  const tr=document.createElement('tr'); tr.id='ntl-'+k; tr.dataset.k=k;
+  tr.innerHTML=`
+    <td><select class="nt-in" id="ntp-${k}" onchange="onNotaProduct(${k})">${opts}</select><div class="rp-tag" id="ntu-${k}"></div></td>
+    <td><input type="number" class="nt-in" id="ntq-${k}" min="0" step="any" value="1" style="width:90px" oninput="calcNota()"></td>
+    <td><input type="number" class="nt-in" id="ntc-${k}" min="0" step="0.01" value="0" style="width:110px" oninput="calcNota()"></td>
+    <td style="text-align:center"><input type="checkbox" id="ntb-${k}" style="width:auto" onchange="calcNota()" title="Bonificação: entra no estoque com custo zero"></td>
+    <td><input type="date" class="nt-in" id="nte-${k}" style="width:140px"></td>
+    <td><input type="text" class="nt-in" id="ntl2-${k}" style="width:90px" placeholder="Opcional"></td>
+    <td style="text-align:right" class="mono" id="nts-${k}">${R(0)}</td>
+    <td><button class="btn btn-sm btn-outline" style="color:var(--danger)" onclick="document.getElementById('ntl-${k}').remove();calcNota()">✕</button></td>`;
+  document.getElementById('nt-lines').appendChild(tr);
+}
+function onNotaProduct(k){
+  const p=S.products.find(x=>x.id===parseInt(document.getElementById('ntp-'+k).value));
+  const u=document.getElementById('ntu-'+k);
+  if(!p){ u.textContent=''; return; }
+  document.getElementById('ntc-'+k).value=p.purchaseCost||0;
+  u.innerHTML=`Compra em <strong>${p.purchaseUnit}</strong>${p.convFactor>1?` (= ${p.convFactor} ${p.stockUnit})`:''}${p.tracksExpiry?' · <span style="color:var(--warn)">validade obrigatória</span>':''}`;
+  const sup=document.getElementById('nt-supplier'); if(!sup.value && p.supps.length) sup.value=p.supps[0];
+  calcNota();
+}
+function notaLines(){
+  return [...document.querySelectorAll('#nt-lines tr')].map(tr=>{
+    const k=tr.dataset.k;
+    return {k, prodId:parseInt(document.getElementById('ntp-'+k).value)||null, qty:num(document.getElementById('ntq-'+k).value),
+      cost:num(document.getElementById('ntc-'+k).value), isBonus:document.getElementById('ntb-'+k).checked,
+      expiry:document.getElementById('nte-'+k).value||null, lot:document.getElementById('ntl2-'+k).value.trim()||null};
+  });
+}
+function toggleNotaParc(){ document.getElementById('nt-parc-grp').style.display=document.getElementById('nt-parc').checked?'grid':'none'; calcNota(); }
+function calcNota(){
+  const lines=notaLines(); const freight=num(document.getElementById('nt-freight').value);
+  let items=0;
+  lines.forEach(l=>{ const v=l.isBonus?0:l.qty*l.cost; items+=v; const el=document.getElementById('nts-'+l.k); if(el) el.textContent=l.isBonus?'Bonif.':R(v); });
+  const total=r2(items+freight);
+  document.getElementById('nt-sum-items').textContent=R(items);
+  document.getElementById('nt-sum-freight').textContent=R(freight);
+  document.getElementById('nt-sum-total').textContent=R(total);
+  const pv=document.getElementById('nt-parc-preview');
+  if(document.getElementById('nt-parc').checked && total>0){
+    const parts=splitInstallments(total, document.getElementById('nt-n').value, document.getElementById('nt-first').value||addDays(today(),30), document.getElementById('nt-interval').value);
+    pv.innerHTML='Parcelas: '+parts.map(x=>`${x.seq_no}ª ${fmtDate(x.due_date)} = ${R(x.amount)}`).join(' · ')+'. Datas e valores podem ser ajustados depois em Caixa e Compras.';
+  } else pv.textContent='';
+}
+async function saveNota(){
+  const date=document.getElementById('nt-date').value;
+  const periodId=parseInt(document.getElementById('nt-period').value);
+  const suppId=parseInt(document.getElementById('nt-supplier').value)||null;
+  const invoice=document.getElementById('nt-invoice').value.trim()||null;
+  const freight=num(document.getElementById('nt-freight').value);
+  const lines=notaLines().filter(l=>l.prodId);
+  if(!date){alert('Informe a data de recebimento.');return;}
+  if(!periodId){alert('Selecione o período. Se não houver período aberto para esta data, crie a semana em Períodos.');return;}
+  if(!lines.length){alert('Adicione ao menos um item com produto.');return;}
+  for(const l of lines){
+    const p=S.products.find(x=>x.id===l.prodId);
+    if(l.qty<=0){alert(`Quantidade de ${p.name} deve ser maior que zero.`);return;}
+    if(!l.isBonus && l.cost<=0){alert(`Informe o custo de ${p.name} (ou marque como bonificação).`);return;}
+    if(p.tracksExpiry && !l.expiry){alert(`${p.name} controla validade: informe a data de validade.`);return;}
+    if(l.expiry && l.expiry<date && !confirm(`${p.name}: a validade (${fmtDate(l.expiry)}) é anterior ao recebimento. Continuar?`)) return;
+  }
+  if(!confirmDateWithinPeriod(S.periods.find(x=>x.id===periodId), date)) return;
+  const fr=allocateFreight(lines, freight);
+  const total=r2(lines.reduce((s,l)=>s+(l.isBonus?0:l.qty*l.cost),0)+freight);
+  const parc=document.getElementById('nt-parc').checked && total>0;
+
+  setLoading(true);
+  try{
+    let commitmentId=null;
+    if(parc){
+      const n=Math.max(1,parseInt(document.getElementById('nt-n').value)||1);
+      const nomes=lines.map(l=>S.products.find(x=>x.id===l.prodId).name);
+      const desc=(invoice?`NF ${invoice} — `:'')+nomes.slice(0,3).join(', ')+(nomes.length>3?` +${nomes.length-3}`:'');
+      const {data:cm,error:e1}=await sb.from('commitments').insert({supplier_id:suppId, description:desc, purchase_date:date, total_amount:total, installments:n, notes:null}).select().single();
+      if(e1) throw e1;
+      commitmentId=cm.id;
+      const parts=splitInstallments(total, n, document.getElementById('nt-first').value||addDays(date,30), document.getElementById('nt-interval').value);
+      const {error:e2}=await sb.from('commitment_installments').insert(parts.map(x=>({...x, commitment_id:cm.id})));
+      if(e2) throw e2;
+    }
+    const rows=lines.map((l,i)=>({
+      period_id:periodId, product_id:l.prodId, supplier_id:suppId, date, qty:l.qty,
+      cost:l.isBonus?0:l.cost, total:r2((l.isBonus?0:l.qty*l.cost)+fr[i]), freight_alloc:fr[i],
+      is_bonus:l.isBonus, expiry_date:l.expiry, lot_code:l.lot, invoice_number:invoice, commitment_id:commitmentId
+    }));
+    const {error:e3}=await sb.from('purchases').insert(rows);
+    if(e3) throw e3;
+    for(const l of lines) if(!l.isBonus) await maybeUpdateProductCost(l.prodId, date, l.cost, null);
+    closeM('m-nota');
+    toast(`Nota registrada: ${lines.length} item(ns)${parc?' · parcelamento criado':''}`);
+    await loadAll();
+  } catch(e){
+    alert('Erro ao salvar a nota. Se for a primeira vez na v7, confirme se a migração "migracao_v7.sql" foi rodada no Supabase.\n\n'+e.message);
+  } finally{ setLoading(false); }
+}
+
+// ─── PERDAS E BAIXAS ──────────────────────────────────────────
+function openLossModal(){
+  document.getElementById('ls-date').value=today();
+  document.getElementById('ls-period').innerHTML=openPeriodOptions(null);
+  autoPeriodFor('ls-date','ls-period');
+  document.getElementById('ls-product').innerHTML='<option value="">— Selecione —</option>'+S.products.filter(p=>p.active).sort((a,b)=>a.name.localeCompare(b.name)).map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
+  document.getElementById('ls-qty').value=1; document.getElementById('ls-reason').value='Vencido'; document.getElementById('ls-notes').value='';
+  document.getElementById('ls-val').textContent='—';
+  openM('m-loss');
+}
+function onLossProduct(){
+  const p=S.products.find(x=>x.id===parseInt(document.getElementById('ls-product').value));
+  if(!p){ document.getElementById('ls-val').textContent='—'; return; }
+  document.getElementById('ls-qty-lbl').textContent=`Quantidade (em ${p.stockUnit}) *`;
+  document.getElementById('ls-val').textContent=R(num(document.getElementById('ls-qty').value)*p.cost);
+}
+async function saveLoss(){
+  const date=document.getElementById('ls-date').value;
+  const periodId=parseInt(document.getElementById('ls-period').value);
+  const p=S.products.find(x=>x.id===parseInt(document.getElementById('ls-product').value));
+  const qty=num(document.getElementById('ls-qty').value);
+  if(!date||!periodId||!p){alert('Preencha data, período e produto.');return;}
+  if(qty<=0){alert('Quantidade deve ser maior que zero.');return;}
+  if(!confirmDateWithinPeriod(S.periods.find(x=>x.id===periodId), date)) return;
+  setLoading(true);
+  const {error}=await sb.from('stock_losses').insert({period_id:periodId, product_id:p.id, date, qty, reason:document.getElementById('ls-reason').value,
+    cost_snapshot:p.cost, notes:document.getElementById('ls-notes').value.trim()||null});
+  setLoading(false);
+  if(error){alert('Erro ao registrar. Confirme se a migração v7 foi rodada no Supabase.\n\n'+error.message);return;}
+  closeM('m-loss'); toast('Perda registrada.'); await loadAll();
+}
+async function deleteLoss(id){
+  if(!confirm('Excluir este registro de perda?')) return;
+  setLoading(true); await sb.from('stock_losses').delete().eq('id',id);
+  toast('Perda excluída.'); await loadAll(); setLoading(false);
+}
+function renderLosses(){
+  const tb=document.getElementById('perdas-tbody'); if(!tb) return;
+  if(!S.losses.length){ tb.innerHTML='<tr><td colspan="8"><div class="empty"><div class="ei">🗑️</div><h3>Nenhuma perda registrada</h3></div></td></tr>'; return; }
+  tb.innerHTML=S.losses.map(l=>{
+    const p=S.products.find(x=>x.id===l.prodId); const per=S.periods.find(x=>x.id===l.periodId);
+    return `<tr><td>${fmtDate(l.date)}</td><td><strong>${p?p.name:'—'}</strong></td>
+      <td style="text-align:right" class="mono">${N(l.qty,3)} <span class="text-muted" style="font-size:11px">${p?p.stockUnit:''}</span></td>
+      <td><span class="badge ${l.reason==='Vencido'?'b-warn':'b-gray'}">${l.reason}</span></td>
+      <td style="text-align:right" class="mono fw6 text-danger">${R(lossVal(l))}</td>
+      <td style="font-size:12px;color:var(--muted)">${per?per.label:'—'}</td>
+      <td style="font-size:12px">${l.notes||''}</td>
+      <td><button class="btn btn-sm btn-outline" style="color:var(--danger)" onclick="deleteLoss(${l.id})">✕</button></td></tr>`;
+  }).join('');
+}
+
+// ─── CMV (tela) ───────────────────────────────────────────────
+// Cálculos ficam no petlab-core: calcCMVDetail, cmvSeries, monthSummary.
+function cmvGoal(){ const g=parseFloat(S.settings.cmv_goal_pct); return isNaN(g)?null:g/100; }
+function pctBadge(v){
+  if(v===null) return '<span class="text-muted">—</span>';
+  const g=cmvGoal(); const cls = g===null ? 'b-gray' : (v>g ? 'b-danger' : 'b-ok');
+  return `<span class="badge ${cls}" ${g!==null?`title="Meta: ${P(g)}"`:''}>${P(v)}</span>`;
 }
 function refreshCMVSelect(){
-  document.getElementById('cmv-sel').innerHTML='<option value="">— Selecione —</option>'+S.periods.map(p=>`<option value="${p.id}">${p.label} (${p.status==='aberto'?'Ativo':'Fechado'})</option>`).join('');
+  const sel=document.getElementById('cmv-sel'); const cur=sel.value;
+  const list=[...S.periods].sort((a,b)=>(b.start||'').localeCompare(a.start||''));
+  sel.innerHTML='<option value="">— Selecione —</option>'+list.map(p=>`<option value="${p.id}">${p.label} (${p.status==='aberto'?'Ativo':'Fechado'})</option>`).join('');
+  if(cur && list.some(p=>String(p.id)===cur)) sel.value=cur;
+  else { const last=list.find(p=>p.type!=='implantacao' && p.openCountId && p.closeCountId); if(last) sel.value=last.id; }
+  const g=document.getElementById('cmv-goal'); if(g && document.activeElement!==g){ const v=cmvGoal(); g.value = v===null?'':r2(v*100); }
+  renderMonthlyRevenue();
   renderCMVHistory();
 }
 function renderCMV(){
   const pid=parseInt(document.getElementById('cmv-sel').value);
   const body=document.getElementById('cmv-body');
   if(!pid||isNaN(pid)){body.innerHTML='<div class="empty"><div class="ei">📊</div><h3>Selecione um período</h3></div>';return;}
-  const p=S.periods.find(x=>x.id===pid); if(!p) return;
-  const oc=p.openCountId?S.counts.find(c=>c.id===p.openCountId):null;
-  const cc=p.closeCountId?S.counts.find(c=>c.id===p.closeCountId):null;
-  const ov=oc?countVal(oc):null; const cv=cc?countVal(cc):null;
-  const purch=S.purchases.filter(x=>x.periodId===pid);
-  const pv=purch.reduce((s,x)=>s+x.total,0);
-  const cmv=(ov!==null&&(p.type==='implantacao'||cv!==null))?(ov||0)+pv-(cv||0):null;
+  const d=calcCMVDetail(pid); if(!d) return;
+  const p=d.p;
+  if(d.implantacao){
+    body.innerHTML=`<div class="alert alert-info"><span>📦</span><span><strong>Implantação</strong> é só o ponto de partida: registra o estoque inicial de <strong>${d.ei!==null?R(d.ei):'—'}</strong>
+      em ${d.oc?fmtDate(d.oc.date):'—'}. Não tem CMV — o primeiro CMV aparece no primeiro período semanal, que abre com esta contagem.</span></div>`
+      + (d.purch.length?`<div class="alert alert-warn"><span>⚠️</span><span>Há ${d.purch.length} compra(s) vinculada(s) à implantação (${R(d.compras)}). Elas não entram em nenhum CMV — edite-as para o período semanal correspondente.</span></div>`:'');
+    return;
+  }
+  const ms=monthSummary(periodRef(p).slice(0,7));
   body.innerHTML=`
     <div class="alert ${p.status==='aberto'?'alert-warn':'alert-ok'}">${p.status==='aberto'?'⚠️ Período ativo — CMV parcial.':'✅ Período fechado — CMV definitivo.'}</div>
     <div class="cmv-grid">
-      <div class="cmv-box"><div class="cl">📦 Estoque Inicial</div><div class="cv">${ov!==null?R(ov):'<span style="color:var(--warn)">Pendente</span>'}</div><div style="font-size:11px;color:var(--muted);margin-top:4px">${oc?fmtDate(oc.date):'—'}</div></div>
-      <div class="cmv-box"><div class="cl">🛒 Compras</div><div class="cv">${R(pv)}</div><div style="font-size:11px;color:var(--muted);margin-top:4px">${purch.length} compra${purch.length!==1?'s':''}</div></div>
-      <div class="cmv-box"><div class="cl">📦 Estoque Final</div><div class="cv">${cv!==null?R(cv):p.type==='implantacao'?'<span style="color:var(--muted)">N/A</span>':'<span style="color:var(--warn)">Pendente</span>'}</div><div style="font-size:11px;color:var(--muted);margin-top:4px">${cc?fmtDate(cc.date):'—'}</div></div>
-      <div class="cmv-box hl"><div class="cl">= CMV</div><div class="cv">${cmv!==null?R(cmv):'—'}</div><div style="font-size:10px;color:var(--primary-d);margin-top:4px">Ini. + Compras − Final</div></div>
+      <div class="cmv-box"><div class="cl">📦 Estoque Inicial</div><div class="cv">${d.ei!==null?R(d.ei):'<span style="color:var(--warn)">Pendente</span>'}</div><div style="font-size:11px;color:var(--muted);margin-top:4px">${d.oc?fmtDate(d.oc.date)+(d.oc.periodId!==p.id?' 🔗 fechamento anterior':''):'—'}</div></div>
+      <div class="cmv-box"><div class="cl">🛒 Compras</div><div class="cv">${R(d.compras)}</div><div style="font-size:11px;color:var(--muted);margin-top:4px">${d.purch.length} item(ns) · inclui frete</div></div>
+      <div class="cmv-box"><div class="cl">📦 Estoque Final</div><div class="cv">${d.ef!==null?R(d.ef):'<span style="color:var(--warn)">Pendente</span>'}</div><div style="font-size:11px;color:var(--muted);margin-top:4px">${d.cc?fmtDate(d.cc.date):'—'}</div></div>
+      <div class="cmv-box hl"><div class="cl">= CMV</div><div class="cv">${d.cmv!==null?R(d.cmv):'—'}</div><div style="font-size:10px;color:var(--primary-d);margin-top:4px">Ini. + Compras − Final</div></div>
     </div>
-    ${purch.length>0?`<div class="panel" style="margin-top:4px"><div class="panel-hdr"><span class="panel-ttl">Compras do Período</span></div><div class="tbl-wrap"><table><thead><tr><th>Data</th><th>Produto</th><th>Qtd</th><th>Custo/Unid. Compra</th><th>Custo/Unid. Estoque</th><th>Total</th></tr></thead><tbody>${purch.map(c=>{const pr=S.products.find(x=>x.id===c.prodId);const pu=pr?pr.purchaseUnit:'un.';const su=pr?pr.stockUnit:'un.';const cf=pr?pr.convFactor:1;const sc=cost_per_stock(c.cost,cf);return `<tr><td>${fmtDate(c.date)}</td><td>${pr?pr.name:'—'}</td><td>${c.qty} <span style="font-size:11px;color:var(--muted)">${pu}</span></td><td class="mono">${R(c.cost)}/${pu}</td><td class="mono ${cf>1?'text-primary':''}">${R(sc)}/${su}</td><td class="mono fw6 text-primary">${R(c.total)}</td></tr>`;}).join('')}<tr style="background:#F8FAFC"><td colspan="5" style="text-align:right;font-weight:600;padding:9px 14px">Total Compras</td><td class="mono fw7 text-primary" style="padding:9px 14px">${R(pv)}</td></tr></tbody></table></div></div>`:''}`;
+    <div class="cmv-grid">
+      <div class="cmv-box"><div class="cl">🗑️ Perdas</div><div class="cv text-danger">${R(d.perdas)}</div><div style="font-size:11px;color:var(--muted);margin-top:4px">${d.losses.length} registro(s)</div></div>
+      <div class="cmv-box"><div class="cl">🧪 CMV Consumo</div><div class="cv">${d.consumo!==null?R(d.consumo):'—'}</div><div style="font-size:11px;color:var(--muted);margin-top:4px">CMV − Perdas</div></div>
+      <div class="cmv-box"><div class="cl">💰 Faturamento do Período</div>
+        <input type="number" step="0.01" min="0" id="cmv-wrev" value="${d.revenue!==null?d.revenue:''}" placeholder="Opcional" style="text-align:center;margin-top:2px" onchange="saveWeeklyRevenue(${p.id})">
+        <div style="font-size:10.5px;color:var(--muted);margin-top:4px">Terceirizados: <input type="number" step="0.01" min="0" id="cmv-wouts" value="${d.revenue!==null?d.outsourced:''}" style="width:90px;padding:3px 6px;font-size:11px;display:inline-block" onchange="saveWeeklyRevenue(${p.id})"></div></div>
+      <div class="cmv-box hl"><div class="cl">= CMV %</div><div class="cv">${d.pct!==null?P(d.pct):'—'}</div>
+        <div style="font-size:10px;color:var(--primary-d);margin-top:4px">${d.pct!==null?(d.pctInt!==null?'s/ internos: '+P(d.pctInt):''):'Sem faturamento do período'}</div></div>
+    </div>
+    <div class="alert alert-info" style="margin-bottom:${d.purch.length?'14px':'0'}"><span>📅</span><span>Mês de competência: <strong>${monthLabel(periodRef(p).slice(0,7))}</strong> (data de fim do período).
+      CMV do mês até agora: <strong>${R(ms.cmv)}</strong> em ${ms.nCompletos} período(s) completo(s)${ms.pct!==null?` · <strong>${P(ms.pct)}</strong> do faturamento (${ms.fonte})`:' · faturamento do mês ainda não lançado'}.
+      O CMV semanal oscila (uma caixa de reagente aberta só "sai" do estoque quando acaba) — decida pelo mensal.</span></div>
+    ${d.purch.length>0?`<div class="panel" style="margin-top:4px"><div class="panel-hdr"><span class="panel-ttl">Compras do Período</span></div><div class="tbl-wrap"><table><thead><tr><th>Recebido</th><th>Produto</th><th>Qtd</th><th>Custo/Unid. Compra</th><th>Custo/Unid. Estoque</th><th>Frete</th><th>Total</th></tr></thead><tbody>${d.purch.map(c=>{const pr=S.products.find(x=>x.id===c.prodId);const pu=pr?pr.purchaseUnit:'un.';const su=pr?pr.stockUnit:'un.';const cf=pr?pr.convFactor:1;const sc=cost_per_stock(c.cost,cf);return `<tr><td>${fmtDate(c.date)}</td><td>${pr?pr.name:'—'}${c.isBonus?' <span class="badge b-indigo">Bonif.</span>':''}</td><td>${N(c.qty,3)} <span style="font-size:11px;color:var(--muted)">${pu}</span></td><td class="mono">${R(c.cost)}/${pu}</td><td class="mono ${cf>1?'text-primary':''}">${R(sc)}/${su}</td><td class="mono text-muted">${c.freight?R(c.freight):'—'}</td><td class="mono fw6 text-primary">${R(c.total)}</td></tr>`;}).join('')}<tr style="background:#F8FAFC"><td colspan="6" style="text-align:right;font-weight:600;padding:9px 14px">Total Compras</td><td class="mono fw7 text-primary" style="padding:9px 14px">${R(d.compras)}</td></tr></tbody></table></div></div>`:''}`;
+}
+async function saveWeeklyRevenue(periodId){
+  const rv=document.getElementById('cmv-wrev').value, ov=document.getElementById('cmv-wouts').value;
+  const revenue = rv==='' ? null : num(rv);
+  const outs = ov==='' ? null : num(ov);
+  if(revenue!==null && outs!==null && outs>revenue){ alert('Terceirizados não pode ser maior que o faturamento.'); return; }
+  const {error}=await sb.from('periods').update({revenue, outsourced_revenue:outs}).eq('id',periodId);
+  if(error){ toast('Erro ao salvar faturamento (rode a migração v7): '+error.message,'err'); return; }
+  const p=S.periods.find(x=>x.id===periodId); if(p){ p.revenue=revenue; p.outsourced=outs||0; }
+  toast('Faturamento do período salvo.');
+  renderCMV(); renderMonthlyRevenue(); renderCMVHistory();
+}
+async function saveCMVGoal(){
+  const v=document.getElementById('cmv-goal').value;
+  const {error}=await sb.from('app_settings').upsert({key:'cmv_goal_pct', value:v===''?null:String(num(v))});
+  if(error){ toast('Erro ao salvar meta (rode a migração v7): '+error.message,'err'); return; }
+  S.settings.cmv_goal_pct = v===''?null:String(num(v));
+  toast('Meta de CMV % salva.'); renderMonthlyRevenue(); renderCMVHistory();
+}
+function renderMonthlyRevenue(){
+  const sel=document.getElementById('rev-year'); if(!sel) return;
+  const cy=today().slice(0,4);
+  const years=[...new Set([cy, ...S.periods.map(p=>(periodRef(p)||'').slice(0,4)).filter(Boolean), ...S.monthlyRevenue.map(m=>m.month.slice(0,4))])].sort();
+  const chosen=(sel.value && years.includes(sel.value))?sel.value:cy;
+  sel.innerHTML=years.map(y=>`<option${y===chosen?' selected':''}>${y}</option>`).join('');
+  const tb=document.getElementById('rev-tbody');
+  let tc=0, tr=0, tpd=0;
+  const rows=[];
+  for(let m=1;m<=12;m++){
+    const ym=`${chosen}-${String(m).padStart(2,'0')}`;
+    const s=monthSummary(ym);
+    if(s.cmv!==null){ tc+=s.cmv; tpd+=s.perdas; if(s.rev) tr+=s.rev; }
+    const mr=s.mr;
+    rows.push(`<tr>
+      <td><strong>${MESES[m-1]}</strong>${s.overlap?' <span class="badge b-warn" title="Há período mensal e semanal no mesmo mês — o CMV pode estar contado em dobro">sobreposição</span>':''}</td>
+      <td style="text-align:right"><input type="number" class="pp-in" step="0.01" min="0" id="rv-r-${ym}" value="${mr?mr.revenue:''}" placeholder="${s.fonte==='semanal'?'Σ semanas: '+r2(s.rev):''}" onchange="saveMonthlyRevenue('${ym}')"></td>
+      <td style="text-align:right"><input type="number" class="pp-in" step="0.01" min="0" id="rv-o-${ym}" value="${mr?mr.outsourced:''}" onchange="saveMonthlyRevenue('${ym}')"></td>
+      <td style="text-align:center;font-size:12px">${s.nPeriods?`${s.nCompletos}/${s.nPeriods}`:'—'}${s.nPendentes?` <span class="badge b-warn" title="Períodos sem contagem de fechamento">${s.nPendentes} pend.</span>`:''}</td>
+      <td style="text-align:right" class="mono ${s.cmv!==null?'fw6':'text-muted'}">${R(s.cmv)}</td>
+      <td style="text-align:right" class="mono text-muted">${s.perdas?R(s.perdas):'—'}</td>
+      <td style="text-align:right">${pctBadge(s.pct)}</td>
+      <td style="text-align:right">${s.pctInt!==null?P(s.pctInt):'<span class="text-muted">—</span>'}</td>
+    </tr>`);
+  }
+  rows.push(`<tr style="background:#F8FAFC"><td class="fw7">Total ${chosen}</td><td style="text-align:right" class="mono fw7">${tr?R(tr):'—'}</td><td></td><td></td><td style="text-align:right" class="mono fw7">${R(tc)}</td><td style="text-align:right" class="mono">${tpd?R(tpd):'—'}</td><td style="text-align:right">${tr?pctBadge(tc/tr):'—'}</td><td></td></tr>`);
+  tb.innerHTML=rows.join('');
+}
+async function saveMonthlyRevenue(ym){
+  const rv=document.getElementById('rv-r-'+ym).value, ov=document.getElementById('rv-o-'+ym).value;
+  const revenue=num(rv), outs=num(ov);
+  if(outs>revenue && revenue>0){ alert('Terceirizados não pode ser maior que o faturamento do mês.'); return; }
+  const month=ym+'-01';
+  const exists=S.monthlyRevenue.find(m=>m.month.slice(0,7)===ym);
+  let error;
+  if(rv==='' && ov==='' && exists) ({error}=await sb.from('monthly_revenue').delete().eq('id',exists.id));
+  else ({error}=await sb.from('monthly_revenue').upsert({month, revenue, outsourced_revenue:outs},{onConflict:'month'}));
+  if(error){ toast('Erro ao salvar (rode a migração v7): '+error.message,'err'); return; }
+  await loadRevenue();
+  toast('Faturamento de '+monthLabel(ym)+' salvo.');
+  renderMonthlyRevenue(); renderCMVHistory(); renderDashboard();
 }
 function renderCMVHistory(){
   const tb=document.getElementById('cmv-hist');
-  const closed=S.periods.filter(p=>p.status==='fechado');
-  if(!closed.length){tb.innerHTML='<tr><td colspan="6"><div class="empty" style="padding:16px"><p>Nenhum período fechado</p></div></td></tr>';return;}
-  tb.innerHTML=closed.map(p=>{
-    const oc=p.openCountId?S.counts.find(c=>c.id===p.openCountId):null;
-    const cc=p.closeCountId?S.counts.find(c=>c.id===p.closeCountId):null;
-    const ov=oc?countVal(oc):0; const cv=cc?countVal(cc):0;
-    const pv=S.purchases.filter(x=>x.periodId===p.id).reduce((s,x)=>s+x.total,0);
-    return `<tr><td><strong>${p.label}</strong></td><td><span class="badge b-primary">${p.typeLabel}</span></td><td class="mono">${R(ov)}</td><td class="mono">${R(pv)}</td><td class="mono">${R(cv)}</td><td class="mono fw7 text-primary">${R(ov+pv-cv)}</td></tr>`;
-  }).join('');
+  const series=cmvSeries().filter(d=>d.completo).reverse();
+  if(!series.length){tb.innerHTML='<tr><td colspan="10"><div class="empty" style="padding:16px"><p>Nenhum período com abertura e fechamento</p></div></td></tr>';return;}
+  tb.innerHTML=series.map(d=>`<tr><td><strong>${d.p.label}</strong>${d.p.status==='aberto'?' <span class="badge b-warn">ativo</span>':''}</td><td><span class="badge b-primary">${d.p.typeLabel}</span></td>
+    <td class="mono">${R(d.ei)}</td><td class="mono">${R(d.compras)}</td><td class="mono">${R(d.ef)}</td><td class="mono fw7 text-primary">${R(d.cmv)}</td>
+    <td class="mono text-muted">${d.perdas?R(d.perdas):'—'}</td><td class="mono">${d.revenue!==null?R(d.revenue):'<span class="text-muted">mensal</span>'}</td>
+    <td>${pctBadge(d.pct)}</td><td>${d.rolling4!==null?P(d.rolling4):'<span class="text-muted">—</span>'}</td></tr>`).join('');
 }
 
 // ─── PRODUCTS ─────────────────────────────────────────────────
@@ -2376,6 +3479,8 @@ function openProductModal(id){
     document.getElementById('prod-m-min').value=p.min;
     document.getElementById('prod-m-subunit').value=p.subUnitLabel||'';
     document.getElementById('prod-m-subqty').value=p.subUnitQty||'';
+    document.getElementById('prod-m-lead').value=p.leadTime;
+    document.getElementById('prod-m-exp').checked=!!p.tracksExpiry;
     Array.from(ss.options).forEach(o=>o.selected=p.supps.includes(parseInt(o.value)));
   } else {
     document.getElementById('prod-m-title').textContent='Novo Produto';
@@ -2388,6 +3493,8 @@ function openProductModal(id){
     document.getElementById('prod-m-min').value=1;
     document.getElementById('prod-m-subunit').value='';
     document.getElementById('prod-m-subqty').value='';
+    document.getElementById('prod-m-lead').value=LEAD_TIME_PADRAO;
+    document.getElementById('prod-m-exp').checked=false;
     Array.from(ss.options).forEach(o=>o.selected=false);
   }
   calcProdStockCost(); // Atualiza campos calculados
@@ -2427,7 +3534,9 @@ async function saveProduct(){
       unit_cost: scost,            // custo por unidade de ESTOQUE (calculado)
       min_stock: min,
       sub_unit_label: subLabel || null,   // referência opcional, não afeta estoque
-      sub_unit_qty: subQty                // referência opcional, não afeta estoque
+      sub_unit_qty: subQty,               // referência opcional, não afeta estoque
+      lead_time_days: parseInt(document.getElementById('prod-m-lead').value)||LEAD_TIME_PADRAO,
+      tracks_expiry: document.getElementById('prod-m-exp').checked
     };
     if(id){
       await sb.from('products').update(productData).eq('id',prodId);
@@ -2538,6 +3647,7 @@ function updateAlertBadge(){
   b.textContent=n; b.classList.toggle('show',n>0);
 }
 function renderAlerts(){
+  renderExpiryAlerts();
   const alerts=getLowAlerts(); const tb=document.getElementById('alert-tbody');
   if(!alerts.length){
     tb.innerHTML='<tr><td colspan="8"><div class="empty"><div class="ei">✅</div><h3>Tudo em dia!</h3></div></td></tr>';return;
@@ -2559,48 +3669,173 @@ function renderAlerts(){
   }).join('');
 }
 
-// ─── UTILS ────────────────────────────────────────────────────
-function R(v){ if(v===null||v===undefined||isNaN(v)) return '—'; return new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(v); }
-function fmtDate(d){ if(!d) return '—'; return new Date(d+'T12:00:00').toLocaleDateString('pt-BR'); }
-function today(){ return new Date().toISOString().split('T')[0]; }
-function cost_per_stock(purchaseCost, convFactor){ return (convFactor && convFactor > 0) ? purchaseCost / convFactor : purchaseCost; }
+// ─── REPOSIÇÃO E VALIDADE (tela) ──────────────────────────────
+const ST_BADGE={'atrasado':'b-danger','esta-semana':'b-warn','abaixo-minimo':'b-danger','sem-historico':'b-gray','sem-contagem':'b-gray','ok':'b-ok'};
+function setRepFilter(f,btn){ repFilter=f; document.querySelectorAll('#rp-filters .fpill').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); renderReposicao(); }
+function updateRepBadge(){
+  const b=document.getElementById('rep-badge'); if(!b) return;
+  let n=0; try{ n=buildReplenishment().rows.filter(r=>r.status==='atrasado'||r.status==='esta-semana').length; }catch(e){}
+  b.textContent=n; b.classList.toggle('show',n>0);
+}
+function renderReposicao(){
+  const rep=buildReplenishment(); const t=today();
+  const acao=rep.rows.filter(r=>['atrasado','esta-semana','abaixo-minimo'].includes(r.status));
+  const pedir=rep.rows.filter(r=>r.status==='esta-semana'), atras=rep.rows.filter(r=>r.status==='atrasado');
+  const risco=rep.rows.reduce((s,r)=>s+r.riskVal,0);
+  document.getElementById('rp-stat-pedir').textContent=pedir.length;
+  document.getElementById('rp-stat-pedir-sub').textContent=pedir.length?R(pedir.reduce((s,r)=>s+(r.sugCost||0),0))+' em reposição sugerida':'Nada a pedir nesta semana';
+  document.getElementById('rp-card-pedir').className='stat-card '+(pedir.length?'c-warn':'c-ok');
+  document.getElementById('rp-stat-atraso').textContent=atras.length;
+  document.getElementById('rp-card-atraso').className='stat-card '+(atras.length?'c-danger':'c-ok');
+  document.getElementById('rp-stat-risco').textContent=R(risco);
+  document.getElementById('rp-card-risco').className='stat-card '+(risco>0?'c-danger':'c-ok');
+  document.getElementById('rp-stat-risco-sub').textContent=rep.rows.filter(r=>r.riskVal>0).length+' produto(s) com lote que vence antes de ser usado';
+  const ex=rep.rows.flatMap(r=>r.res.lots.filter(l=>l.exitDate).map(l=>({q:l.qtyIn,d:daysBetween(l.entry,l.exitDate)})));
+  const wq=ex.reduce((s,x)=>s+x.q,0);
+  document.getElementById('rp-stat-dias').textContent=wq>0?N(ex.reduce((s,x)=>s+x.q*x.d,0)/wq,0)+' dias':'—';
+
+  // Semanas
+  const weeks=replenishmentWeeks(8,rep);
+  document.getElementById('rp-weeks-tbody').innerHTML=weeks.map((w,k)=>{
+    const itens=w.sug.map(r=>`${r.p.name} (${r.sugUnits} ${r.p.purchaseUnit})`).join(', ');
+    let sit;
+    if(w.aperto===true) sit='<span class="badge b-danger" title="Parcelas + reposição maiores que o saldo final projetado">Caixa não fecha</span>';
+    else if(w.aperto===false) sit='<span class="badge b-ok">Cabe no caixa</span>';
+    else sit='<span class="badge b-gray" title="Semana não cadastrada no Planejamento Semanal">Sem plano</span>';
+    return `<tr class="${k===0?'pp-now':''}">
+      <td><div class="pp-week-lbl">${weekLabel(w.ws)}</div>${k===0?'<div class="pp-week-sub">Semana atual (inclui atrasados)</div>':''}</td>
+      <td style="text-align:right" class="mono ${w.parcTot?'fw6':'text-muted'}" title="${w.parc.map(i=>{const c=S.commits.find(x=>x.id===i.commitId);return (c?commitLabel(c):'')+' '+fmtDate(i.due)+' '+R(i.amount);}).join('\n')}">${R(w.parcTot)}</td>
+      <td style="text-align:right" class="mono ${w.sugTot?'fw6 text-primary':'text-muted'}">${R(w.sugTot)}</td>
+      <td style="font-size:12px;max-width:280px">${itens||'<span class="text-muted">—</span>'}</td>
+      <td style="text-align:right" class="mono ${w.vencTot?'text-danger fw6':'text-muted'}" title="${w.venc.map(v=>v.r.p.name+' — '+N(v.l.atRisk,2)+' '+v.r.p.stockUnit+' vence '+fmtDate(v.l.expiry)).join('\n')}">${R(w.vencTot)}</td>
+      <td style="text-align:right" class="mono">${w.saldo!==null?R(w.saldo):'<span class="text-muted">—</span>'}</td>
+      <td>${sit}</td></tr>`;
+  }).join('');
+
+  // Produtos
+  let list=rep.rows;
+  if(repFilter==='acao') list=acao;
+  else if(repFilter==='validade') list=rep.rows.filter(r=>r.nearestExpiry || r.p.tracksExpiry);
+  const ord={'atrasado':0,'esta-semana':1,'abaixo-minimo':2,'ok':3,'sem-historico':4,'sem-contagem':5};
+  list=[...list].sort((a,b)=>(ord[a.status]-ord[b.status]) || (a.pedirAte||'9').localeCompare(b.pedirAte||'9'));
+  const tb=document.getElementById('rp-tbody');
+  if(!list.length){ tb.innerHTML=`<tr><td colspan="11"><div class="empty"><div class="ei">✅</div><h3>${repFilter==='acao'?'Nenhum item precisa de ação agora':'Nenhum produto'}</h3><p>Use os filtros acima para ver todos.</p></div></td></tr>`; return; }
+  tb.innerHTML=list.map(r=>{
+    const su=r.p.stockUnit;
+    const expCls=r.nearestExpiry?(r.nearestExpiry<t?'b-danger':(r.nearestExpiry<=addDays(t,60)?'b-warn':'b-gray')):'';
+    return `<tr>
+      <td><strong>${r.p.name}</strong><div class="rp-tag">${r.p.cat} · prazo ${r.lead}d</div></td>
+      <td style="text-align:right" class="mono">${N(r.res.stock,2)} <span class="text-muted" style="font-size:11px">${su}</span></td>
+      <td style="text-align:right" class="mono">${r.weekly!==null?N(r.weekly,2):'—'}</td>
+      <td style="text-align:right" class="mono">${r.coverage!==null?N(r.coverage,0)+' d':'—'}</td>
+      <td>${r.ruptura?fmtDate(r.ruptura):'—'}</td>
+      <td>${r.pedirAte?`<strong>${fmtDate(r.pedirAte)}</strong>`:'—'}<div><span class="badge ${ST_BADGE[r.status]}">${STATUS_LABEL[r.status]}</span></div></td>
+      <td>${r.sugUnits!==null?`${r.sugUnits} ${r.p.purchaseUnit}<div class="rp-tag">${R(r.sugCost)}</div>`:'—'}</td>
+      <td>${r.nearestExpiry?`<span class="badge ${expCls}">${fmtDate(r.nearestExpiry)}</span>`:(r.p.tracksExpiry?'<span class="badge b-warn" title="Produto controla validade mas nenhum lote em estoque tem data">sem data</span>':'<span class="text-muted">—</span>')}</td>
+      <td style="text-align:right" class="mono ${r.riskVal>0?'text-danger fw6':'text-muted'}">${r.riskVal>0?R(r.riskVal)+`<div class="rp-tag">${N(r.riskQty,2)} ${su}</div>`:'—'}</td>
+      <td style="text-align:right" class="mono">${r.avgDays!==null?N(r.avgDays,0)+' d':'—'}</td>
+      <td><button class="btn btn-sm btn-outline" onclick="showLots(${r.p.id})">Lotes</button></td>
+    </tr>`;
+  }).join('');
+}
+// Detalhe dos lotes de um produto: entrada, saída, tempo em estoque e validade
+function showLots(pid){
+  const r=replenishmentRow(S.products.find(p=>p.id===pid)); const su=r.p.stockUnit;
+  const rows=[...r.res.lots].sort((a,b)=>b.entry.localeCompare(a.entry)).map(l=>`<tr>
+    <td>${l.src}${l.lotCode?`<div class="rp-tag">Lote ${l.lotCode}</div>`:''}</td><td>${fmtDate(l.entry)}</td>
+    <td style="text-align:right" class="mono">${N(l.qtyIn,2)}</td><td style="text-align:right" class="mono">${N(l.remaining,2)}</td>
+    <td>${l.expiry?fmtDate(l.expiry):'—'}</td>
+    <td>${l.exitDate?`<span class="badge b-gray">Acabou ${fmtDate(l.exitDate)}</span>`:(l.expired?'<span class="badge b-danger">Vencido</span>':(l.predictedExit?`Prev. ${fmtDate(l.predictedExit)}`:'—'))}</td>
+    <td style="text-align:right" class="mono">${daysBetween(l.entry,l.exitDate||today())} d</td>
+    <td style="text-align:right" class="mono ${l.atRisk>0?'text-danger fw6':'text-muted'}">${l.atRisk>0?N(l.atRisk,2):'—'}</td></tr>`).join('');
+  const box=document.createElement('div'); box.className='mo open'; box.id='m-lots';
+  box.innerHTML=`<div class="modal modal-xl"><div class="modal-hdr"><div><h3>Lotes — ${r.p.name}</h3><div class="msub">Quantidades em ${su}. Consumo calculado pelas contagens, saindo primeiro o lote que vence primeiro.${r.res.adjustments>0?` Ajustes de contagem acima do esperado: ${N(r.res.adjustments,2)} ${su}.`:''}</div></div>
+    <button class="modal-x" onclick="document.getElementById('m-lots').remove();document.body.style.overflow=''">×</button></div>
+    <div class="modal-body"><div class="tbl-wrap"><table><thead><tr><th>Origem</th><th>Entrada</th><th style="text-align:right">Qtd Entrada</th><th style="text-align:right">Saldo</th><th>Validade</th><th>Saída</th><th style="text-align:right">Tempo em Estoque</th><th style="text-align:right">Em Risco</th></tr></thead>
+    <tbody>${rows||'<tr><td colspan="8"><div class="empty"><p>Sem lotes — faça a contagem de implantação.</p></div></td></tr>'}</tbody></table></div></div></div>`;
+  box.addEventListener('click',e=>{ if(e.target===box){ box.remove(); document.body.style.overflow=''; } });
+  document.body.appendChild(box); document.body.style.overflow='hidden';
+}
+// Painel de validade na aba Alertas
+function renderExpiryAlerts(){
+  const tb=document.getElementById('exp-tbody'); if(!tb) return;
+  const t=today(), lim=addDays(t,60);
+  const rows=[];
+  buildReplenishment().rows.forEach(r=>r.res.lots.forEach(l=>{
+    if(l.remaining>EPS && l.expiry && l.expiry<=lim) rows.push({r,l});
+  }));
+  rows.sort((a,b)=>a.l.expiry.localeCompare(b.l.expiry));
+  if(!rows.length){ tb.innerHTML='<tr><td colspan="7"><div class="empty"><div class="ei">✅</div><h3>Nada vencendo nos próximos 60 dias</h3></div></td></tr>'; return; }
+  tb.innerHTML=rows.map(({r,l})=>{
+    const venc=l.expiry<t;
+    return `<tr><td><strong>${r.p.name}</strong></td><td>${l.lotCode?'Lote '+l.lotCode:l.src}<div class="rp-tag">entrada ${fmtDate(l.entry)}</div></td>
+      <td><span class="badge ${venc?'b-danger':'b-warn'}">${fmtDate(l.expiry)}</span><div class="rp-tag">${venc?'vencido há '+daysBetween(l.expiry,t):'em '+daysBetween(t,l.expiry)} dias</div></td>
+      <td style="text-align:right" class="mono">${N(l.remaining,2)} ${r.p.stockUnit}</td>
+      <td style="text-align:right" class="mono ${l.atRisk>0?'text-danger fw6':''}">${l.atRisk>0?N(l.atRisk,2)+' '+r.p.stockUnit:'0 — usa antes'}</td>
+      <td style="text-align:right" class="mono">${R((l.atRisk||0)*r.p.cost)}</td>
+      <td>${venc?'<span class="badge b-danger">Registrar perda</span>':(l.atRisk>0?'<span class="badge b-warn">Não vai dar tempo de usar</span>':'<span class="badge b-ok">Consome antes</span>')}</td></tr>`;
+  }).join('');
+}
+
+// ─── EXPORTAÇÃO (tela) ────────────────────────────────────────
+function getOpt(id){ const b=document.querySelector(`#${id} .fpill.active`); return b?b.dataset.v:null; }
+function setExportOpt(id,btn){
+  document.querySelectorAll(`#${id} .fpill`).forEach(b=>b.classList.remove('active')); btn.classList.add('active');
+  const mode=getOpt('ex-mode');
+  document.getElementById('ex-range').style.display=mode==='range'?'grid':'none';
+  document.getElementById('ex-periods').style.display=mode==='periods'?'block':'none';
+  previewExport();
+}
+function openExportModal(){
+  const per=[...S.periods].sort((a,b)=>(b.start||'').localeCompare(a.start||''));
+  document.getElementById('ex-periods').innerHTML = per.length ? per.map(p=>`<label class="ex-per"><input type="checkbox" value="${p.id}" onchange="previewExport()"> ${p.label} <span class="text-muted" style="font-size:11px">${fmtDate(p.start)}${p.end?' – '+fmtDate(p.end):''}</span></label>`).join('')
+    : '<span class="text-muted">Nenhum período cadastrado.</span>';
+  const t=today();
+  document.getElementById('ex-from').value=t.slice(0,8)+'01';
+  document.getElementById('ex-to').value=t;
+  document.getElementById('ex-from').onchange=previewExport; document.getElementById('ex-to').onchange=previewExport;
+  previewExport(); openM('m-export');
+}
+function exportFilter(){
+  const mode=getOpt('ex-mode');
+  if(mode==='range') return {mode, from:document.getElementById('ex-from').value||null, to:document.getElementById('ex-to').value||null};
+  if(mode==='periods') return {mode, periodIds:[...document.querySelectorAll('#ex-periods input:checked')].map(i=>parseInt(i.value))};
+  return {mode:'all'};
+}
+function previewExport(){
+  const f=exportFilter(); const el=document.getElementById('ex-preview');
+  if(f.mode==='periods' && !f.periodIds.length){ el.innerHTML='Selecione ao menos um período.'; return; }
+  if(f.mode==='range' && f.from && f.to && f.from>f.to){ el.innerHTML='A data inicial é depois da final.'; return; }
+  try{
+    const d=buildExportData(f); const c=n=>(d.sheets.find(s=>s.name===n)||{rows:[]}).rows.length;
+    el.innerHTML=`📦 <strong>${d.meta.filtro.descricao}</strong><br>${c('CMV por Período')} período(s) · ${c('Contagens')} linha(s) de contagem · ${c('Compras')} compra(s) · ${c('Perdas')} perda(s) · ${c('Parcelas')} parcela(s) · ${c('Faturamento Mensal')} mês(es)`;
+  }catch(e){ el.textContent='Erro ao montar a prévia: '+e.message; }
+}
+function downloadBlob(content, name, type){
+  const blob=new Blob([content],{type}); const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a); a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },500);
+}
+function runExport(){
+  const f=exportFilter(); const fmt=getOpt('ex-fmt');
+  if(f.mode==='periods' && !f.periodIds.length){ alert('Selecione ao menos um período.'); return; }
+  if(f.mode==='range' && (!f.from || !f.to || f.from>f.to)){ alert('Informe um intervalo de datas válido.'); return; }
+  const data=buildExportData(f);
+  const tag=f.mode==='all'?'completo':(f.mode==='range'?`${f.from}_a_${f.to}`:`${f.periodIds.length}-periodos`);
+  const base=`petlab_estoque_${tag}_${today()}`;
+  if(fmt==='xlsx'||fmt==='both'){
+    if(typeof XLSX==='undefined'){ alert('A biblioteca de Excel não carregou (verifique a internet). Use o JSON.'); }
+    else XLSX.writeFile(buildWorkbook(XLSX,data), base+'.xlsx');
+  }
+  if(fmt==='json'||fmt==='both'){
+    downloadBlob(JSON.stringify({meta:data.meta, dados:data.raw, calculados:data.calc},null,2), base+'.json','application/json');
+  }
+  closeM('m-export'); toast('Exportação gerada!');
+}
+
+// ─── UTILS (formatação e datas ficam no bloco petlab-core) ────
 function openM(id){ document.getElementById(id).classList.add('open'); document.body.style.overflow='hidden'; }
 function closeM(id){ document.getElementById(id).classList.remove('open'); document.body.style.overflow=''; }
-
-// Utilitários de semana (segunda a domingo)
-function mondayOf(d){
-  const dt=new Date(d+'T12:00:00');
-  const dow=dt.getDay();               // 0=domingo, 1=segunda...
-  const diff=(dow===0? -6 : 1-dow);    // domingo pertence à semana que começou na segunda anterior
-  dt.setDate(dt.getDate()+diff);
-  return dt.toISOString().split('T')[0];
-}
-function addDays(d,n){
-  const dt=new Date(d+'T12:00:00');
-  dt.setDate(dt.getDate()+n);
-  return dt.toISOString().split('T')[0];
-}
-function fmtDayMonth(d){
-  const dt=new Date(d+'T12:00:00');
-  return String(dt.getDate()).padStart(2,'0')+'/'+String(dt.getMonth()+1).padStart(2,'0');
-}
-function weekLabel(d){ return fmtDayMonth(d)+' – '+fmtDayMonth(addDays(d,6)); }
-// Soma meses preservando o dia — se o mês destino não tiver o dia, usa o último dia dele
-function addMonths(d,n){
-  const dt=new Date(d+'T12:00:00');
-  const day=dt.getDate();
-  const alvo=new Date(dt.getFullYear(), dt.getMonth()+n, 1);
-  const ultimo=new Date(alvo.getFullYear(), alvo.getMonth()+1, 0).getDate();
-  alvo.setDate(Math.min(day, ultimo));
-  return isoOf(alvo);
-}
-function lastDayOfMonth(d){
-  const dt=new Date(d+'T12:00:00');
-  return isoOf(new Date(dt.getFullYear(), dt.getMonth()+1, 0));
-}
-function isoOf(dt){
-  return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0');
-}
 
 document.querySelectorAll('.mo').forEach(el=>{
   el.addEventListener('click', function(e){ if(e.target===this) closeM(this.id); });
@@ -2609,26 +3844,26 @@ document.querySelectorAll('.mo').forEach(el=>{
 // ─── EDIT FUNCTIONS ───────────────────────────────────────────
 function editPurchase(id){
   const c=S.purchases.find(x=>x.id===id); if(!c) return;
-  // Constrói selects incluindo o período da compra mesmo se fechado
-  const allPeriods=[...S.periods];
-  document.getElementById('pu-period').innerHTML='<option value="">— Selecione —</option>'+
-    allPeriods.map(p=>`<option value="${p.id}">${p.label}${p.status==='fechado'?' (fechado)':''}</option>`).join('');
+  document.getElementById('pu-period').innerHTML=openPeriodOptions(c.periodId);
   document.getElementById('pu-product').innerHTML='<option value="">— Selecione —</option>'+
     S.products.filter(p=>p.active).sort((a,b)=>a.name.localeCompare(b.name))
     .map(p=>`<option value="${p.id}">${p.name} (${p.cat})</option>`).join('');
   document.getElementById('pu-supplier').innerHTML='<option value="">— Selecione —</option>'+
     S.suppliers.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
-  // Modo edição
+  // Modo edição — frete rateado e bonificação da nota são preservados
+  puEditFreight = c.freight || 0; puEditBonus = !!c.isBonus;
   document.getElementById('pu-edit-id').value=id;
-  document.getElementById('pu-modal-title').textContent='Editar Compra';
+  document.getElementById('pu-modal-title').textContent='Editar Compra'+(c.invoice?` — NF ${c.invoice}`:'');
   document.getElementById('pu-save-btn').textContent='Salvar Alterações';
-  // Preenche campos
   document.getElementById('pu-date').value=c.date;
   document.getElementById('pu-period').value=c.periodId;
   document.getElementById('pu-product').value=c.prodId;
   onPurchaseProduct(); // carrega contexto UOM
   document.getElementById('pu-qty').value=c.qty;
   document.getElementById('pu-cost').value=c.cost;
+  document.getElementById('pu-expiry').value=c.expiry||'';
+  document.getElementById('pu-lot').value=c.lotCode||'';
+  document.getElementById('pu-invoice').value=c.invoice||'';
   if(c.suppId) document.getElementById('pu-supplier').value=c.suppId;
   calcPuTotal();
   openM('m-purchase');
@@ -2636,24 +3871,27 @@ function editPurchase(id){
 
 function editCount(id){
   const cnt=S.counts.find(c=>c.id===id); if(!cnt) return;
-  // Constrói select de períodos incluindo o período da contagem
   document.getElementById('cnt-period').innerHTML='<option value="">— Selecione —</option>'+
-    S.periods.map(p=>`<option value="${p.id}">${p.label}${p.status==='fechado'?' (fechado)':''}</option>`).join('');
-  // Modo edição
+    [...S.periods].sort((a,b)=>(b.start||'').localeCompare(a.start||'')).map(p=>`<option value="${p.id}">${p.label}${p.status==='fechado'?' (fechado)':''}</option>`).join('');
   document.getElementById('cnt-edit-id').value=id;
   document.getElementById('cnt-modal-title').textContent='Editar Contagem';
   document.getElementById('cnt-save-btn').textContent='Salvar Alterações';
-  // Preenche campos de cabeçalho
   document.getElementById('cnt-date').value=cnt.date;
   document.getElementById('cnt-period').value=cnt.periodId;
-  document.getElementById('cnt-type').value=cnt.type;
-  // Constrói tabela zerada e depois preenche com os valores existentes
-  buildCountTable();
+  const per=S.periods.find(p=>p.id===cnt.periodId);
+  // Tipo pelo vínculo real do período (abertura ou fechamento)
+  const ts=document.getElementById('cnt-type');
+  if(per && per.type==='implantacao') ts.innerHTML='<option value="abertura">Implantação (Estoque Inicial)</option>';
+  else ts.innerHTML='<option value="abertura">Abertura</option><option value="fechamento">Fechamento</option>';
+  ts.value = (per && per.closeCountId===id) ? 'fechamento' : (per && per.type!=='implantacao' ? cnt.type : 'abertura');
+  buildCountTable(); toggleExpCol(per||null);
   cnt.items.forEach(item=>{
     const fEl=document.getElementById(`cf-${item.pid}`);
     const aEl=document.getElementById(`ca-${item.pid}`);
+    const eEl=document.getElementById(`ce-${item.pid}`);
     if(fEl) fEl.value=item.f||0;
     if(aEl) aEl.value=item.a||0;
+    if(eEl) eEl.value=item.expiry||'';
     updRow(item.pid);
   });
   openM('m-count');
@@ -2666,6 +3904,9 @@ function editPeriod(id){
   document.getElementById('pe-start').value=p.start;
   document.getElementById('pe-end').value=p.end||'';
   document.getElementById('pe-end-grp').style.display=p.type==='implantacao'?'none':'block';
+  document.getElementById('pe-rev-grp').style.display=p.type==='implantacao'?'none':'block';
+  document.getElementById('pe-rev').value=p.revenue!==null?p.revenue:'';
+  document.getElementById('pe-outs').value=p.revenue!==null?p.outsourced:'';
   openM('m-period-edit');
 }
 
@@ -2674,12 +3915,19 @@ async function savePeriodEdit(){
   const label=document.getElementById('pe-label').value.trim();
   const start=document.getElementById('pe-start').value;
   const end=document.getElementById('pe-end').value;
+  const rv=document.getElementById('pe-rev').value, ov=document.getElementById('pe-outs').value;
   if(!label){alert('Informe o nome do período.');return;}
   if(!start){alert('Informe a data de início.');return;}
+  if(end && end<start){alert('A data de fim não pode ser antes do início.');return;}
+  const upd={label, start_date:start, end_date:end||null};
+  const p=S.periods.find(x=>x.id===id);
+  if(p && p.type!=='implantacao'){
+    upd.revenue = rv===''?null:num(rv);
+    upd.outsourced_revenue = ov===''?null:num(ov);
+    if(upd.revenue!==null && upd.outsourced_revenue>upd.revenue){ alert('Terceirizados não pode ser maior que o faturamento.'); return; }
+  }
   setLoading(true);
-  const {error}=await sb.from('periods').update({
-    label, start_date:start, end_date:end||null
-  }).eq('id',id);
+  const {error}=await sb.from('periods').update(upd).eq('id',id);
   if(error){setLoading(false);alert('Erro: '+error.message);return;}
   closeM('m-period-edit');
   toast('Período atualizado!');
