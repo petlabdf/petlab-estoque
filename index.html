@@ -856,6 +856,7 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
         <strong>Aberto/Solto</strong> = quantidade solta na unidade de estoque, apenas do pacote em uso.
         O sistema calcula o total automaticamente: Fechado × Fator + Aberto. Aceita decimais (ex: 0,5 litro).</span>
       </div>
+      <div class="alert alert-warn" id="cnt-done-note" style="display:none;margin-bottom:14px"><span>⚠️</span><span></span></div>
       <div class="alert alert-warn" id="cnt-exp-note" style="display:none;margin-bottom:14px">
         <span>⏳</span><span>Contagem de <strong>implantação</strong>: informe a validade mais próxima dos itens que têm validade. É ela que alimenta o risco de vencimento do estoque que já existia antes do sistema.</span>
       </div>
@@ -2718,10 +2719,18 @@ function openCountModal(){
   document.getElementById('cnt-edit-id').value='';
   document.getElementById('cnt-modal-title').textContent='Nova Contagem de Estoque';
   document.getElementById('cnt-save-btn').textContent='Salvar Contagem';
-  // Períodos abertos que ainda precisam de contagem (fechamento, ou abertura/implantação sem contagem)
-  const ps=S.periods.filter(p=>p.status==='aberto' && (p.type==='implantacao' ? !p.openCountId : (!p.openCountId || !p.closeCountId)))
+  // Todos os períodos ATIVOS aparecem (antes, o que já tinha abertura e fechamento sumia da lista),
+  // com a indicação do que falta em cada um. Implantação já feita não é oferecida de novo.
+  const ps=S.periods.filter(p=>p.status==='aberto' && !(p.type==='implantacao' && p.openCountId))
     .sort((a,b)=>a.start.localeCompare(b.start));
-  document.getElementById('cnt-period').innerHTML='<option value="">— Selecione —</option>'+ps.map(p=>`<option value="${p.id}">${p.label}</option>`).join('');
+  const falta=p=>{
+    if(p.type==='implantacao') return '';
+    const cc=p.closeCountId?S.counts.find(c=>c.id===p.closeCountId):null;
+    if(!p.openCountId) return ' · falta abertura';
+    if(!p.closeCountId) return ' · falta fechamento';
+    return ' · já tem fechamento'+(cc?' ('+fmtDate(cc.date).slice(0,5)+')':'');
+  };
+  document.getElementById('cnt-period').innerHTML='<option value="">— Selecione —</option>'+ps.map(p=>`<option value="${p.id}">${p.label}${falta(p)}</option>`).join('');
   document.getElementById('cnt-date').value=today();
   buildCountTable();
   if(ps.length===1){ document.getElementById('cnt-period').value=ps[0].id; onCountPeriodChange(); }
@@ -2735,7 +2744,16 @@ function toggleExpCol(period){
 }
 function onCountPeriodChange(){
   const pid=parseInt(document.getElementById('cnt-period').value);
-  const p=S.periods.find(x=>x.id===pid); toggleExpCol(p||null); if(!p) return;
+  const p=S.periods.find(x=>x.id===pid); toggleExpCol(p||null);
+  const done=document.getElementById('cnt-done-note');
+  const ccDone=(p && p.type!=='implantacao' && p.openCountId && p.closeCountId) ? S.counts.find(c=>c.id===p.closeCountId) : null;
+  done.style.display = ccDone ? 'flex' : 'none';
+  if(ccDone) done.querySelector('span:last-child').innerHTML =
+    `Esta semana <strong>já tem a contagem de fechamento</strong> de ${fmtDate(ccDone.date)}. `
+    +`Para corrigir números, use <strong>Editar</strong> na lista de contagens. `
+    +`Para encerrar a semana, clique em <strong>Fechar</strong> em Períodos. `
+    +`Se salvar aqui, a contagem anterior será <strong>substituída</strong>.`;
+  if(!p) return;
   const ts=document.getElementById('cnt-type');
   if(p.type==='implantacao'){
     ts.innerHTML='<option value="abertura">Implantação (Estoque Inicial)</option>';
