@@ -1161,10 +1161,15 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
         <span class="text-muted" style="margin-left:12px">Total da Nota:</span><strong class="mono text-primary" id="nt-sum-total">R$ 0,00</strong>
       </div>
       <div class="divider"></div>
-      <div class="fg" style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-        <input type="checkbox" id="nt-parc" style="width:auto" onchange="toggleNotaParc()">
-        <label for="nt-parc" style="margin:0;text-transform:none;font-size:13px;color:var(--text)"><strong>Pagamento parcelado</strong> — gera o cronograma em Caixa e Compras</label>
+      <div class="fg" style="max-width:420px"><label>Forma de pagamento *</label>
+        <select id="nt-pay" onchange="toggleNotaParc()">
+          <option value="">Selecione...</option>
+          <option value="vista">À vista (sem parcelas)</option>
+          <option value="parc">Parcelado (já tenho as condições ou o boleto)</option>
+          <option value="tbd">A definir (o boleto ainda não saiu)</option>
+        </select>
       </div>
+      <div class="alert alert-info" id="nt-tbd-note" style="display:none;margin-bottom:12px"><span>💡</span><span>O material entra no estoque e no CMV <strong>hoje</strong>, com a data de recebimento. Quando o boleto sair, crie a compra em <strong>Caixa e Compras</strong> e clique em <strong>🔗 Notas</strong> para ligar esta nota às parcelas.</span></div>
       <div class="fr3" id="nt-parc-grp" style="display:none">
         <div class="fg"><label>Nº de Parcelas</label><input type="number" id="nt-n" min="1" step="1" value="2" oninput="calcNota()"></div>
         <div class="fg"><label>1º Vencimento</label><input type="date" id="nt-first" onchange="calcNota()"></div>
@@ -1224,6 +1229,20 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
       <div id="ex-preview" class="conv-info-box" style="display:block"></div>
     </div>
     <div class="modal-foot"><button class="btn btn-outline" onclick="closeM('m-export')">Cancelar</button><button class="btn btn-primary" onclick="runExport()">⬇ Baixar</button></div>
+  </div>
+</div>
+
+<!-- VINCULAR NOTAS DE ESTOQUE A UMA COMPRA PARCELADA -->
+<div class="mo" id="m-link">
+  <div class="modal" style="max-width:640px">
+    <div class="modal-hdr"><div><h3>Vincular notas de estoque</h3><div class="msub" id="lk-sub"></div></div><button class="modal-x" onclick="closeM('m-link')">×</button></div>
+    <div class="modal-body">
+      <div class="conv-hint" style="margin-bottom:8px">Marque as notas de estoque que foram pagas por esta compra parcelada. Isso mostra, em cada compra, até quando o material dura em relação à última parcela. Desmarcar remove o vínculo.</div>
+      <label class="ex-per"><input type="checkbox" id="lk-all" onchange="renderLinkList()"> Mostrar também notas com mais de 60 dias</label>
+      <div id="lk-list" style="max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px 12px;margin:8px 0"></div>
+      <div id="lk-sum" class="conv-info-box" style="display:block"></div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-outline" onclick="closeM('m-link')">Cancelar</button><button class="btn btn-primary" onclick="saveLinks()">Salvar vínculos</button></div>
   </div>
 </div>
 
@@ -1325,10 +1344,12 @@ function minDate(a,b){ if(!a) return b||null; if(!b) return a; return a<b?a:b; }
 function periodRef(p){ return p.end || p.start; }
 function sortedPeriods(){ return [...S.periods].sort((a,b)=>(a.start||'').localeCompare(b.start||'') || a.id-b.id); }
 function implantacaoPeriod(){ return S.periods.filter(p=>p.type==='implantacao').sort((a,b)=>a.start.localeCompare(b.start))[0]||null; }
-// Período aberto que contém a data — usado para sugerir o período ao lançar compra/perda
+// Período que contém a data, para sugerir ao lançar compra/perda: prefere o aberto; se não
+// houver, usa o fechado (compra que chegou numa semana já encerrada e foi lançada depois)
 function periodForDate(date){
-  const cands=S.periods.filter(p=>p.status==='aberto' && p.type!=='implantacao' && p.start<=date && (!p.end || date<=p.end));
-  return cands.sort((a,b)=>b.start.localeCompare(a.start))[0]||null;
+  const inR=p=>p.type!=='implantacao' && p.start<=date && (!p.end || date<=p.end);
+  const pick=l=>l.sort((a,b)=>b.start.localeCompare(a.start))[0]||null;
+  return pick(S.periods.filter(p=>p.status==='aberto' && inR(p))) || pick(S.periods.filter(inR));
 }
 // Próximo período semanal sugerido: começa no dia seguinte ao fim do último período (ou na implantação)
 function suggestNextWeek(){
@@ -2562,7 +2583,7 @@ function renderCommitments(){
         <span style="font-size:11px;color:var(--muted)">${pagas}/${list.length}</span>
       </div></td>
       <td>${horiz}</td>
-      <td><button class="btn btn-sm btn-outline" style="color:var(--danger)" onclick="deleteCommitment(${c.id})">✕</button></td>
+      <td style="white-space:nowrap"><button class="btn btn-sm btn-outline" onclick="openLinkModal(${c.id})" title="Ligar esta compra às notas de estoque (itens que entraram no estoque)">🔗 Notas${S.purchases.some(x=>x.commitmentId===c.id)?' ('+new Set(S.purchases.filter(x=>x.commitmentId===c.id).map(x=>(x.invoice||'')+'|'+x.date+'|'+(x.suppId||''))).size+')':''}</button> <button class="btn btn-sm btn-outline" style="color:var(--danger)" onclick="deleteCommitment(${c.id})">✕</button></td>
     </tr>`;
   }).join('');
 }
@@ -2945,11 +2966,18 @@ function autoPeriodFor(dateId, selId){
 }
 function openPeriodOptions(includeId){
   return '<option value="">— Selecione —</option>'+S.periods
-    .filter(p=>p.type!=='implantacao' && (p.status==='aberto' || p.id===includeId))
+    .filter(p=>p.type!=='implantacao')
     .sort((a,b)=>b.start.localeCompare(a.start))
     .map(p=>`<option value="${p.id}">${p.label}${p.status==='fechado'?' (fechado)':''}</option>`).join('');
 }
 
+// Lançar em período já fechado é permitido (compra que chegou antes e foi digitada depois),
+// mas muda o CMV daquele período — por isso pede confirmação.
+function confirmClosedPeriod(period){
+  if(period && period.status==='fechado')
+    return confirm(`O período "${period.label}" já está fechado. Este lançamento vai alterar o CMV dele. Continuar?`);
+  return true;
+}
 function openPurchaseModal(){ openNotaModal(); }   // registro novo é sempre por nota
 
 function onPurchaseProduct(){
@@ -3073,7 +3101,7 @@ function renderPurchases(){
       <td class="mono text-muted">${c.freight?R(c.freight):'—'}</td>
       <td class="mono fw6 text-primary">${R(c.total)}</td>
       <td>${c.expiry?`<span class="badge ${expCls}">${fmtDate(c.expiry)}</span>`:'<span class="text-muted">—</span>'}${c.lotCode?`<div class="rp-tag">Lote ${c.lotCode}</div>`:''}</td>
-      <td style="font-size:12px">${c.invoice||'—'}${c.commitmentId?'<div><span class="badge b-indigo">Parcelada</span></div>':''}</td>
+      <td style="font-size:12px">${c.invoice||'—'}${c.commitmentId?'<div><span class="badge b-indigo">Parcelada</span></div>':'<div><span class="badge b-gray" title="Nota sem compra parcelada vinculada: à vista, ou boleto ainda a definir">Sem parcelas</span></div>'}</td>
       <td style="font-size:12px;color:var(--muted)">${per?per.label:'—'}</td>
       <td style="white-space:nowrap"><button class="btn btn-sm btn-outline" onclick="editPurchase(${c.id})">Editar</button> <button class="btn btn-sm btn-outline" style="color:var(--danger);margin-left:4px" onclick="deletePurchase(${c.id})">✕</button></td>
     </tr>`;
@@ -3091,7 +3119,7 @@ function openNotaModal(){
   document.getElementById('nt-supplier').innerHTML='<option value="">— Selecione —</option>'+S.suppliers.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
   document.getElementById('nt-invoice').value='';
   document.getElementById('nt-freight').value=0;
-  document.getElementById('nt-parc').checked=false;
+  document.getElementById('nt-pay').value='';
   document.getElementById('nt-n').value=2;
   document.getElementById('nt-first').value=addDays(today(),30);
   document.getElementById('nt-interval').value='month';
@@ -3131,7 +3159,12 @@ function notaLines(){
       expiry:document.getElementById('nte-'+k).value||null, lot:document.getElementById('ntl2-'+k).value.trim()||null};
   });
 }
-function toggleNotaParc(){ document.getElementById('nt-parc-grp').style.display=document.getElementById('nt-parc').checked?'grid':'none'; calcNota(); }
+function toggleNotaParc(){
+  const pay=document.getElementById('nt-pay').value;
+  document.getElementById('nt-parc-grp').style.display=pay==='parc'?'grid':'none';
+  document.getElementById('nt-tbd-note').style.display=pay==='tbd'?'flex':'none';
+  calcNota();
+}
 function calcNota(){
   const lines=notaLines(); const freight=num(document.getElementById('nt-freight').value);
   let items=0;
@@ -3141,7 +3174,7 @@ function calcNota(){
   document.getElementById('nt-sum-freight').textContent=R(freight);
   document.getElementById('nt-sum-total').textContent=R(total);
   const pv=document.getElementById('nt-parc-preview');
-  if(document.getElementById('nt-parc').checked && total>0){
+  if(document.getElementById('nt-pay').value==='parc' && total>0){
     const parts=splitInstallments(total, document.getElementById('nt-n').value, document.getElementById('nt-first').value||addDays(today(),30), document.getElementById('nt-interval').value);
     pv.innerHTML='Parcelas: '+parts.map(x=>`${x.seq_no}ª ${fmtDate(x.due_date)} = ${R(x.amount)}`).join(' · ')+'. Datas e valores podem ser ajustados depois em Caixa e Compras.';
   } else pv.textContent='';
@@ -3154,7 +3187,7 @@ async function saveNota(){
   const freight=num(document.getElementById('nt-freight').value);
   const lines=notaLines().filter(l=>l.prodId);
   if(!date){alert('Informe a data de recebimento.');return;}
-  if(!periodId){alert('Selecione o período. Se não houver período aberto para esta data, crie a semana em Períodos.');return;}
+  if(!periodId){alert('Selecione o período. Se não houver período para esta data, crie a semana em Períodos.');return;}
   if(!lines.length){alert('Adicione ao menos um item com produto.');return;}
   for(const l of lines){
     const p=S.products.find(x=>x.id===l.prodId);
@@ -3163,10 +3196,14 @@ async function saveNota(){
     if(p.tracksExpiry && !l.expiry){alert(`${p.name} controla validade: informe a data de validade.`);return;}
     if(l.expiry && l.expiry<date && !confirm(`${p.name}: a validade (${fmtDate(l.expiry)}) é anterior ao recebimento. Continuar?`)) return;
   }
-  if(!confirmDateWithinPeriod(S.periods.find(x=>x.id===periodId), date)) return;
+  const pay=document.getElementById('nt-pay').value;
+  if(!pay){alert('Escolha a forma de pagamento: à vista, parcelado ou a definir (boleto ainda não saiu).');return;}
+  const notaPeriod=S.periods.find(x=>x.id===periodId);
+  if(!confirmDateWithinPeriod(notaPeriod, date)) return;
+  if(!confirmClosedPeriod(notaPeriod)) return;
   const fr=allocateFreight(lines, freight);
   const total=r2(lines.reduce((s,l)=>s+(l.isBonus?0:l.qty*l.cost),0)+freight);
-  const parc=document.getElementById('nt-parc').checked && total>0;
+  const parc=pay==='parc' && total>0;
 
   setLoading(true);
   try{
@@ -3191,11 +3228,64 @@ async function saveNota(){
     if(e3) throw e3;
     for(const l of lines) if(!l.isBonus) await maybeUpdateProductCost(l.prodId, date, l.cost, null);
     closeM('m-nota');
-    toast(`Nota registrada: ${lines.length} item(ns)${parc?' · parcelamento criado':''}`);
+    toast(`Nota registrada: ${lines.length} item(ns)${parc?' · parcelamento criado':''}${pay==='tbd'?' · pagamento a definir':''}`);
     await loadAll();
   } catch(e){
     alert('Erro ao salvar a nota. Se for a primeira vez na v7, confirme se a migração "migracao_v7.sql" foi rodada no Supabase.\n\n'+e.message);
   } finally{ setLoading(false); }
+}
+
+// ─── VÍNCULO ENTRE NOTA DE ESTOQUE E COMPRA PARCELADA ────────
+// Uma "nota" = linhas de compra com o mesmo nº da nota, data de recebimento e fornecedor.
+let linkCid=null, linkGroups=[];
+function groupPurchases(){
+  const g={};
+  S.purchases.forEach(x=>{
+    const k=`${x.invoice||''}|${x.date}|${x.suppId||''}`;
+    (g[k]=g[k]||{date:x.date,suppId:x.suppId,invoice:x.invoice,ids:[],total:0,cids:new Set()});
+    g[k].ids.push(x.id); g[k].total+=x.total; g[k].cids.add(x.commitmentId||0);
+  });
+  return Object.values(g);
+}
+function openLinkModal(cid){
+  linkCid=cid; const c=S.commits.find(x=>x.id===cid); if(!c) return;
+  document.getElementById('lk-sub').textContent=`${commitLabel(c)} · ${R(c.total)} em ${c.n}x`;
+  document.getElementById('lk-all').checked=false;
+  renderLinkList(); openM('m-link');
+}
+function renderLinkList(){
+  const cid=linkCid, cut=addDays(today(),-60), all=document.getElementById('lk-all').checked;
+  // só notas sem vínculo ou já ligadas a esta compra (as ligadas a outra compra ficam de fora)
+  linkGroups=groupPurchases().filter(g=>(g.cids.size===1 && (g.cids.has(0)||g.cids.has(cid))) && (all||g.date>=cut||g.cids.has(cid)))
+    .sort((a,b)=>b.date.localeCompare(a.date));
+  const box=document.getElementById('lk-list');
+  box.innerHTML=linkGroups.length?linkGroups.map((g,i)=>{
+    const sp=S.suppliers.find(s=>s.id===g.suppId);
+    return `<label class="ex-per"><input type="checkbox" data-i="${i}" ${g.cids.has(cid)?'checked':''} onchange="updateLinkSum()"> ${fmtDate(g.date)} · ${sp?sp.name:'sem fornecedor'} · NF ${g.invoice||'s/n'} · ${g.ids.length} item(ns) · <strong>${R(g.total)}</strong></label>`;
+  }).join(''):'<span class="text-muted">Nenhuma nota sem vínculo no período. Marque "mostrar também notas antigas" ou lance a nota em Compras.</span>';
+  updateLinkSum();
+}
+function updateLinkSum(){
+  const c=S.commits.find(x=>x.id===linkCid);
+  const sum=[...document.querySelectorAll('#lk-list input:checked')].reduce((t,i)=>t+linkGroups[+i.dataset.i].total,0);
+  const diff=r2(sum-c.total);
+  document.getElementById('lk-sum').innerHTML=`Notas marcadas: <strong>${R(sum)}</strong> · Compra parcelada: <strong>${R(c.total)}</strong> · `
+    +(sum===0?'nenhuma nota marcada':(Math.abs(diff)<=1?'<strong style="color:var(--ok)">valores batem</strong>':`diferença de <strong>${R(Math.abs(diff))}</strong> (confira juros, desconto, frete ou nota faltando)`));
+}
+async function saveLinks(){
+  setLoading(true);
+  try{
+    for(const inp of document.querySelectorAll('#lk-list input')){
+      const g=linkGroups[+inp.dataset.i]; const was=g.cids.has(linkCid);
+      if(inp.checked===was) continue;
+      for(const id of g.ids){
+        const {error}=await sb.from('purchases').update({commitment_id: inp.checked?linkCid:null}).eq('id',id);
+        if(error) throw error;
+      }
+    }
+    closeM('m-link'); toast('Vínculos salvos.'); await loadAll();
+  }catch(e){ alert('Erro ao salvar vínculos: '+e.message); }
+  finally{ setLoading(false); }
 }
 
 // ─── PERDAS E BAIXAS ──────────────────────────────────────────
@@ -3221,7 +3311,9 @@ async function saveLoss(){
   const qty=num(document.getElementById('ls-qty').value);
   if(!date||!periodId||!p){alert('Preencha data, período e produto.');return;}
   if(qty<=0){alert('Quantidade deve ser maior que zero.');return;}
-  if(!confirmDateWithinPeriod(S.periods.find(x=>x.id===periodId), date)) return;
+  const lossPeriod=S.periods.find(x=>x.id===periodId);
+  if(!confirmDateWithinPeriod(lossPeriod, date)) return;
+  if(!confirmClosedPeriod(lossPeriod)) return;
   setLoading(true);
   const {error}=await sb.from('stock_losses').insert({period_id:periodId, product_id:p.id, date, qty, reason:document.getElementById('ls-reason').value,
     cost_snapshot:p.cost, notes:document.getElementById('ls-notes').value.trim()||null});
