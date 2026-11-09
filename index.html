@@ -212,6 +212,30 @@ input[readonly]{background:#F8FAFC;cursor:default;color:var(--primary-d);font-we
 <body>
 
 <!--
+  ═══ MIGRAÇÃO v7.2 (rodar UMA vez; está também em migracao_v7_2.sql) ═══
+
+ALTER TABLE products
+  ADD COLUMN IF NOT EXISTS sale_price     NUMERIC(12,2),   -- preço cobrado por exame (opcional)
+  ADD COLUMN IF NOT EXISTS exams_per_unit NUMERIC;         -- exames que rende 1 unidade de estoque (opcional)
+
+CREATE TABLE IF NOT EXISTS exam_volumes (
+  id           BIGSERIAL PRIMARY KEY,
+  period_start DATE NOT NULL,
+  period_end   DATE NOT NULL,
+  exam_name    TEXT NOT NULL DEFAULT '(total)',
+  qty          NUMERIC NOT NULL,
+  granularity  TEXT,
+  batch_id     TEXT,
+  source_file  TEXT,
+  created_at   TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS exam_volumes_period_idx ON exam_volumes(period_start, period_end);
+ALTER TABLE exam_volumes DISABLE ROW LEVEL SECURITY;
+GRANT ALL ON exam_volumes TO anon, authenticated;
+GRANT USAGE, SELECT ON SEQUENCE exam_volumes_id_seq TO anon, authenticated;
+-->
+
+<!--
   ═══ COPIE O SQL ABAIXO (também está no arquivo migracao_v7.sql) ═══
 
 -- ════════════════════════════════════════════════════════════════
@@ -413,6 +437,7 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
     <div class="nav-item" id="nav-cmv" onclick="go('cmv')"><span class="ni">📈</span>CMV</div>
     <div class="nav-lbl">Financeiro</div>
     <div class="nav-item" id="nav-reposicao" onclick="go('reposicao')"><span class="ni">🔄</span>Reposição e Validade<span class="nb" id="rep-badge">0</span></div>
+    <div class="nav-item" id="nav-exames" onclick="go('exames')"><span class="ni">🧪</span>Exames Realizados</div>
     <div class="nav-item" id="nav-planejamento" onclick="go('planejamento')"><span class="ni">🗓️</span>Planejamento Semanal</div>
     <div class="nav-item" id="nav-parcelamentos" onclick="go('parcelamentos')"><span class="ni">💳</span>Caixa e Compras<span class="nb" id="cc-badge">0</span></div>
     <div class="nav-lbl">Cadastros</div>
@@ -664,7 +689,7 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
         <div class="stat-card" id="rp-card-pedir"><div class="lbl">Pedir Esta Semana</div><div class="val" id="rp-stat-pedir">0</div><div class="sub" id="rp-stat-pedir-sub">—</div></div>
         <div class="stat-card" id="rp-card-atraso"><div class="lbl">Pedidos Atrasados</div><div class="val" id="rp-stat-atraso">0</div><div class="sub">Já passou do "pedir até"</div></div>
         <div class="stat-card" id="rp-card-risco"><div class="lbl">Risco de Perda por Validade</div><div class="val" id="rp-stat-risco">—</div><div class="sub" id="rp-stat-risco-sub">Vence antes de ser usado</div></div>
-        <div class="stat-card"><div class="lbl">Tempo Médio em Estoque</div><div class="val" id="rp-stat-dias">—</div><div class="sub">Dias entre entrada e saída do lote</div></div>
+        <div class="stat-card"><div class="lbl">Tempo Médio em Estoque</div><div class="val" id="rp-stat-dias">—</div><div class="sub">Lotes que saíram nas últimas 4 semanas</div></div>
       </div>
       <div class="panel">
         <div class="panel-hdr"><span class="panel-ttl">📆 Próximas 8 Semanas — Parcelas × Reposição × Vencimentos</span></div>
@@ -682,10 +707,52 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
           </div>
         </div>
         <div class="tbl-wrap">
-          <table><thead><tr><th>Produto</th><th style="text-align:right">Estoque</th><th style="text-align:right">Consumo/Sem.</th><th style="text-align:right">Cobertura</th><th>Acaba em</th><th>Pedir até</th><th>Sugestão</th><th>Validade Próxima</th><th style="text-align:right">Risco Perda</th><th style="text-align:right">Tempo em Estoque</th><th></th></tr></thead>
+          <table><thead><tr><th>Produto</th><th style="text-align:right">Estoque</th><th style="text-align:right">Consumo/Sem.</th><th style="text-align:right">Cobertura</th><th>Acaba em</th><th>Pedir até</th><th>Sugestão</th><th>Validade Próxima</th><th style="text-align:right">Risco Perda</th><th style="text-align:right" title="Lotes que saíram nas últimas 4 semanas">Tempo em Estoque (4 sem.)</th><th></th></tr></thead>
           <tbody id="rp-tbody"></tbody></table>
         </div>
       </div>
+      <div class="panel" id="rp-margin-panel">
+        <div class="panel-hdr"><span class="panel-ttl">💰 Margem Potencial do Estoque Atual (estimativa)</span></div>
+        <div class="panel-body">
+          <div class="alert alert-warn"><span>⚠️</span><span><strong>Estimativa sobre o estoque de hoje, não é lucro realizado.</strong> Conta: estoque esperado × exames que cada unidade rende × preço cobrado (cadastrados em Produtos). Considera só o custo do insumo, sem mão de obra, outros materiais, repetições nem perdas. Só entram itens com custo, preço e rendimento preenchidos; nenhum insumo é ligado a exame automaticamente.</span></div>
+          <div class="stats-grid" id="mg-cards"></div>
+          <div class="tbl-wrap"><table><thead><tr><th>Produto</th><th style="text-align:right">Estoque</th><th style="text-align:right">Custo</th><th style="text-align:right">Exames possíveis</th><th style="text-align:right">Preço/exame</th><th style="text-align:right">Receita potencial</th><th style="text-align:right">Margem</th><th style="text-align:right">Margem %</th></tr></thead>
+          <tbody id="mg-tbody"></tbody></table></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- EXAMES REALIZADOS -->
+    <section class="section" id="section-exames">
+      <div class="alert alert-info"><span>🧪</span><span>Importe a planilha de exames realizados do sistema do laboratório. <strong>O sistema não presume o formato</strong>: você escolhe as colunas e confere a prévia antes de salvar. Os dados servem para acompanhar volume e sazonalidade; as sugestões de compra <strong>ainda não usam</strong> esses números.</span></div>
+      <div class="panel">
+        <div class="panel-hdr"><span class="panel-ttl">📥 Importar exames realizados</span></div>
+        <div class="panel-body">
+          <div class="fr">
+            <div class="fg"><label>Arquivo (.xlsx, .xls ou .csv)</label><input type="file" id="ex-file" accept=".xlsx,.xls,.csv,.txt" onchange="exLoadFile(this)"></div>
+            <div class="fg"><label>Aba</label><select id="ex-sheet" onchange="exSheetChange()"></select></div>
+          </div>
+          <div id="ex-map" style="display:none">
+            <div class="fr">
+              <div class="fg"><label>Linha do cabeçalho</label><input type="number" id="ex-hdr" value="1" min="1" onchange="exRebuild()"></div>
+              <div class="fg"><label>Cada linha do arquivo representa</label><select id="ex-gran" onchange="exPreview()"><option value="dia">Um dia</option><option value="semana">Uma semana (data = início)</option><option value="mes">Um mês</option><option value="intervalo">Um intervalo (início e fim)</option></select></div>
+            </div>
+            <div class="fr">
+              <div class="fg"><label>Coluna da data *</label><select id="ex-c-date" onchange="exPreview()"></select></div>
+              <div class="fg" id="ex-c-dateEnd-grp" style="display:none"><label>Coluna da data final *</label><select id="ex-c-dateEnd" onchange="exPreview()"></select></div>
+            </div>
+            <div class="fr">
+              <div class="fg"><label>Coluna do exame (opcional)</label><select id="ex-c-exam" onchange="exPreview()"></select><div class="conv-hint">Sem ela, tudo entra como "(total)"</div></div>
+              <div class="fg"><label>Coluna da quantidade *</label><select id="ex-c-qty" onchange="exPreview()"></select></div>
+            </div>
+            <div class="fg" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="ex-replace" style="width:auto" checked><label for="ex-replace" style="margin:0;text-transform:none;font-size:13px;color:var(--text)">Substituir o que já foi importado no mesmo intervalo de datas (evita duplicar)</label></div>
+            <div class="fg" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="ex-ignore" style="width:auto" onchange="exPreview()"><label for="ex-ignore" style="margin:0;text-transform:none;font-size:13px;color:var(--text)">Ignorar linhas com erro e importar só as válidas</label></div>
+            <div id="ex-preview"></div>
+            <div style="margin-top:12px"><button class="btn btn-primary" id="ex-import-btn" onclick="exImport()" disabled>Importar</button></div>
+          </div>
+        </div>
+      </div>
+      <div id="ex-result"></div>
     </section>
 
     <!-- CMV -->
@@ -1023,6 +1090,12 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
       <div class="fr">
         <div class="fg"><label>Est. Mínimo (em Unid. de Estoque)</label><input type="number" id="prod-m-min" value="1" min="0" step="any"></div>
         <div class="fg"><label>Prazo de Entrega (dias)</label><input type="number" id="prod-m-lead" value="7" min="0" step="1"><div class="conv-hint">Usado no "pedir até" da reposição</div></div>
+      </div>
+      <div class="divider"></div>
+      <div class="conv-hint" style="margin-bottom:6px"><strong>Margem potencial (opcional).</strong> Só preencha se este insumo é usado em um exame com preço definido. O sistema não liga insumo a exame sozinho.</div>
+      <div class="fr">
+        <div class="fg"><label>Preço cobrado por exame (R$)</label><input type="number" id="prod-m-price" min="0" step="0.01" placeholder="vazio = não calcular"></div>
+        <div class="fg"><label>Exames que rende 1 unidade de estoque</label><input type="number" id="prod-m-epu" min="0" step="any" placeholder="Ex: 1 se a unidade já é 1 exame"><div class="conv-hint">Ex: unidade "Teste" = 1. Caixa com 50 exames = 50.</div></div>
       </div>
       <div class="fg" style="display:flex;align-items:center;gap:8px">
         <input type="checkbox" id="prod-m-exp" style="width:auto">
@@ -1497,13 +1570,17 @@ function buildLots(p){
   res.stock=res.lots.reduce((s,l)=>s+l.remaining,0);
   return res;
 }
-// Consumo médio diário: últimos intervalos até somar 28 dias ou 4 intervalos
+// Consumo médio diário nas últimas 4 semanas (28 dias até a última contagem).
+// Intervalo que cruza o início da janela entra proporcional aos dias dentro dela.
+// Não depende do dia da semana em que a contagem é feita.
 function consumptionRate(intervals){
-  let days=0,q=0,n=0;
-  for(let i=intervals.length-1;i>=0;i--){
-    const it=intervals[i]; if(it.days<=0) continue;
-    days+=it.days; q+=it.qty; n++;
-    if(days>=28||n>=4) break;
+  if(!intervals.length) return null;
+  const ref=intervals[intervals.length-1].to, cut=addDays(ref,-JANELA_DIAS);
+  let days=0,q=0;
+  for(const it of intervals){
+    if(it.days<=0 || it.to<=cut) continue;
+    const ov=Math.min(it.days, daysBetween(cut,it.to));
+    days+=ov; q+=it.qty*ov/it.days;
   }
   return days>0 ? q/days : null;
 }
@@ -1542,9 +1619,13 @@ function replenishmentRow(p){
   const open=res.lots.filter(l=>l.remaining>EPS);
   const nearestExpiry=open.filter(l=>l.expiry).map(l=>l.expiry).sort()[0]||null;
   const riskQty=open.reduce((s,l)=>s+(l.atRisk||0),0);
-  const exited=res.lots.filter(l=>l.exitDate);
-  const wq=exited.reduce((s,l)=>s+l.qtyIn,0);
-  const avgDays=wq>0? exited.reduce((s,l)=>s+l.qtyIn*daysBetween(l.entry,l.exitDate),0)/wq : null;
+  // Tempo médio em estoque: lotes que SAÍRAM nas últimas 4 semanas, ponderado pela quantidade
+  // (entrada = recebimento da compra; saída = contagem em que o lote acabou)
+  const avgOf=ls=>{ const q=ls.reduce((s,l)=>s+l.qtyIn,0); return q>0? ls.reduce((s,l)=>s+l.qtyIn*daysBetween(l.entry,l.exitDate),0)/q : null; };
+  const winCut=res.lastCount?addDays(res.lastCount,-JANELA_DIAS):null;
+  const exitedAll=res.lots.filter(l=>l.exitDate);
+  const exited=winCut?exitedAll.filter(l=>l.exitDate>winCut && l.exitDate<=res.lastCount):[];
+  const avgDays=avgOf(exited), avgDaysAll=avgOf(exitedAll);
   let status;
   if(!res.lastCount) status='sem-contagem';
   else if(pedirAte && pedirAte<t) status='atrasado';
@@ -1553,7 +1634,7 @@ function replenishmentRow(p){
   else if(!daily) status='sem-historico';
   else status='ok';
   return {p,res,daily,weekly:daily!==null?daily*7:null,coverage:(daily>EPS)?res.stock/daily:null,
-    ruptura:res.ruptura,pedirAte,lead,sugUnits,sugCost,nearestExpiry,riskQty,riskVal:riskQty*(Number(p.cost)||0),avgDays,status};
+    ruptura:res.ruptura,pedirAte,lead,sugUnits,sugCost,nearestExpiry,riskQty,riskVal:riskQty*(Number(p.cost)||0),avgDays,avgDaysAll,exitedWin:exited,status};
 }
 function buildReplenishment(){
   const rows=S.products.filter(p=>p.active!==false).map(replenishmentRow);
@@ -1617,6 +1698,110 @@ function splitInstallments(total, n, first, interval){
     out.push({seq_no:k+1, due_date:due, amount:(k===n-1)?r2(total-base*(n-1)):base});
   }
   return out;
+}
+
+// ─── JANELA DE 4 SEMANAS (consumo e tempo em estoque) ─────────
+const JANELA_DIAS = 28;
+
+// ─── MARGEM POTENCIAL DO ESTOQUE (estimativa, não é lucro realizado) ──
+// Reaproveita o custo por unidade de estoque do cadastro (p.cost, atualizado pela compra mais
+// recente) e o estoque esperado da reposição. Só calcula quando há custo, preço cobrado e
+// rendimento (exames por unidade de estoque) informados. Nada é inferido.
+function stockMargin(rep){
+  rep=rep||buildReplenishment();
+  const rows=rep.rows.map(r=>{
+    const p=r.p, qty=r.res.stock, cost=Number(p.cost)||0;
+    const price=Number(p.salePrice)||0, epu=Number(p.examsPerUnit)||0;
+    const o={p,qty,unit:p.stockUnit,cost,costVal:qty*cost,price,examsPerUnit:epu,exams:null,revenue:null,margin:null,pct:null,status:'ok'};
+    if(!r.res.lastCount) o.status='sem-contagem';
+    else if(qty<=EPS) o.status='sem-estoque';
+    else if(cost<=0) o.status='sem-custo';
+    else if(price<=0) o.status='sem-preco';
+    else if(epu<=0) o.status='sem-rendimento';
+    else { o.exams=qty*epu; o.revenue=o.exams*price; o.margin=o.revenue-o.costVal; o.pct=o.revenue>0?o.margin/o.revenue:null; }
+    return o;
+  });
+  const ok=rows.filter(x=>x.status==='ok');
+  const sum=(a,f)=>a.reduce((s,x)=>s+f(x),0);
+  const revenue=sum(ok,x=>x.revenue), costVal=sum(ok,x=>x.costVal), margin=revenue-costVal;
+  const comEstoque=rows.filter(x=>!['sem-contagem','sem-estoque'].includes(x.status));
+  return {rows, tot:{n:ok.length, nComEstoque:comEstoque.length, costVal, revenue, margin, pct:revenue>0?margin/revenue:null,
+    costValSemDados:sum(comEstoque.filter(x=>x.status!=='ok'),x=>x.costVal)}};
+}
+
+// ─── IMPORTAÇÃO DE EXAMES REALIZADOS (formato do arquivo NÃO é presumido) ──
+function parseDateFlex(v){
+  if(v===null||v===undefined||v==='') return null;
+  const ok=(y,m,d)=>{ if(m<1||m>12||d<1||y<1990||y>2100) return null; const dt=new Date(y,m-1,d,12); return (dt.getMonth()===m-1&&dt.getDate()===d)?isoOf(dt):null; };
+  if(v instanceof Date) return isNaN(v)?null:ok(v.getFullYear(),v.getMonth()+1,v.getDate());
+  if(typeof v==='number'){ return (v>=20000&&v<=80000)? addDays('1899-12-30',Math.floor(v)) : null; } // data do Excel
+  const s=String(v).trim(); let m;
+  if((m=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ].*)?$/))) return ok(+m[1],+m[2],+m[3]);
+  if((m=s.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2}|\d{4})(?:\s.*)?$/))) return ok(m[3].length===2?2000+(+m[3]):+m[3],+m[2],+m[1]); // dia/mês/ano
+  if((m=s.match(/^(\d{1,2})\/(\d{4})$/))) return ok(+m[2],+m[1],1);                       // mês/ano
+  return null;
+}
+function parseQty(v){
+  if(v===null||v===undefined||v==='') return null;
+  if(typeof v==='number') return isFinite(v)?v:null;
+  let s=String(v).trim().replace(/\s/g,''); if(!s) return null;
+  if(/^-?\d{1,3}(\.\d{3})+(,\d+)?$/.test(s)) s=s.replace(/\./g,'').replace(',','.');
+  else if(/^-?\d+,\d+$/.test(s)) s=s.replace(',','.');
+  else if(!/^-?\d+(\.\d+)?$/.test(s)) return null;
+  const n=parseFloat(s); return isFinite(n)?n:null;
+}
+// rows: matriz (sem o cabeçalho). map: {date,dateEnd,exam,qty} = índices de coluna (null se não usar).
+// gran: 'dia' | 'semana' | 'mes' | 'intervalo'. firstLine = nº da linha do arquivo da 1ª linha de dados.
+function validateExamRows(rows, map, gran, firstLine){
+  firstLine=firstLine||2;
+  const res={valid:[],errors:[],blank:0,fatal:null,duplicates:0,first:null,last:null,total:0,exams:new Set()};
+  if(map.date===null||map.date===undefined||map.date==='') res.fatal='Escolha a coluna da data.';
+  else if(map.qty===null||map.qty===undefined||map.qty==='') res.fatal='Escolha a coluna da quantidade de exames.';
+  else if(gran==='intervalo' && (map.dateEnd===null||map.dateEnd===undefined||map.dateEnd==='')) res.fatal='Para "intervalo" escolha também a coluna da data final.';
+  if(res.fatal) return res;
+  const seen=new Set();
+  rows.forEach((row,i)=>{
+    const line=firstLine+i; const get=c=>(c===null||c===undefined||c==='')?null:row[+c];
+    const d=get(map.date), q=get(map.qty), e=get(map.dateEnd), ex=get(map.exam);
+    if([d,q,e,ex].every(x=>x===null||x===undefined||String(x).trim()==='')){ res.blank++; return; }
+    let start=parseDateFlex(d);
+    if(!start){ res.errors.push({line,msg:`data inválida: "${d===null?'':d}"`}); return; }
+    const qty=parseQty(q);
+    if(qty===null){ res.errors.push({line,msg:`quantidade inválida: "${q===null?'':q}"`}); return; }
+    if(qty<0){ res.errors.push({line,msg:`quantidade negativa: ${qty}`}); return; }
+    let end;
+    if(gran==='dia') end=start;
+    else if(gran==='semana') end=addDays(start,6);
+    else if(gran==='mes'){ start=start.slice(0,7)+'-01'; end=lastDayOfMonth(start); }
+    else { end=parseDateFlex(e); if(!end){ res.errors.push({line,msg:`data final inválida: "${e===null?'':e}"`}); return; }
+           if(end<start){ res.errors.push({line,msg:'data final anterior à inicial'}); return; } }
+    const exam=(ex===null||String(ex).trim()==='')?'(total)':String(ex).trim();
+    const key=start+'|'+end+'|'+exam.toLowerCase(); if(seen.has(key)) res.duplicates++; seen.add(key);
+    res.valid.push({start,end,exam,qty,line}); res.total+=qty; res.exams.add(exam);
+    if(!res.first||start<res.first) res.first=start; if(!res.last||end>res.last) res.last=end;
+  });
+  return res;
+}
+// Soma por mês de referência (o mês em que o período termina — mesma regra F5 do faturamento)
+function aggregateExams(vols){
+  const m={};
+  vols.forEach(v=>{ const ym=String(v.end).slice(0,7); const o=(m[ym]=m[ym]||{ym,total:0,byExam:{}}); const q=Number(v.qty)||0; o.total+=q; o.byExam[v.exam]=(o.byExam[v.exam]||0)+q; });
+  return Object.values(m).sort((a,b)=>a.ym.localeCompare(b.ym));
+}
+// Índice = total do mês ÷ média dos meses carregados. Só é confiável com 12 meses ou mais.
+function seasonality(monthly){
+  const n=monthly.length, avg=n?monthly.reduce((s,x)=>s+x.total,0)/n:0;
+  return {n, avg, confiavel:n>=12, rows:monthly.map((x,i)=>({ym:x.ym,total:x.total,idx:avg>0?x.total/avg:null,delta:(i>0&&monthly[i-1].total>0)?x.total/monthly[i-1].total-1:null}))};
+}
+
+// ─── SEMANA TERMINA NO DIA DA CONTAGEM DE FECHAMENTO ──────────
+// A contagem pode ser feita na segunda, na terça ou em qualquer dia: se a data do fechamento
+// difere do fim previsto, propõe terminar a semana nesse dia e começar a próxima no dia seguinte.
+function planClosingAlignment(periods, period, date){
+  if(!period || period.type!=='semanal' || !period.end || !date || date===period.end || date<=period.start) return null;
+  const next=periods.filter(p=>p.id!==period.id && p.type!=='implantacao' && p.start===addDays(period.end,1))[0]||null;
+  if(next && next.end && date>=next.end) return null;
+  return {periodId:period.id, newEnd:date, next:next?{id:next.id,newStart:addDays(date,1)}:null, delta:daysBetween(period.end,date)};
 }
 
 // ─── EXPORTAÇÃO ───────────────────────────────────────────────
@@ -1695,9 +1880,13 @@ function buildExportData(filter){
     rows:rep.rows.map(r=>({'Produto':r.p.name,'Categoria':r.p.cat,'Estoque Atual':r.res.stock,'Unid. Estoque':r.p.stockUnit,'Consumo Semanal':r.weekly,'Cobertura (dias)':r.coverage,'Ruptura Prevista':r.ruptura,
       'Prazo Entrega (dias)':r.lead,'Pedir Até':r.pedirAte,'Situação':STATUS_LABEL[r.status]||r.status,'Sugestão (unid. compra)':r.sugUnits,'Unid. Compra':r.p.purchaseUnit,'Custo Sugestão (R$)':r.sugCost,
       'Validade Mais Próxima':r.nearestExpiry,'Qtd em Risco':r.riskQty,'Risco de Perda (R$)':r.riskVal,'Tempo Médio em Estoque (dias)':r.avgDays}))});
-  sheets.push({name:'Produtos', cols:['ID','Nome','Categoria','Unid. Compra','Unid. Estoque','Fator','Custo/Unid. Compra (R$)','Custo/Unid. Estoque (R$)','Sub-unidade','Qtd Sub-unid.','Est. Mínimo','Prazo Entrega (dias)','Controla Validade','Fornecedores'],
+  sheets.push({name:'Produtos', cols:['ID','Nome','Categoria','Unid. Compra','Unid. Estoque','Fator','Custo/Unid. Compra (R$)','Custo/Unid. Estoque (R$)','Sub-unidade','Qtd Sub-unid.','Est. Mínimo','Prazo Entrega (dias)','Controla Validade','Preço Cobrado (R$)','Exames por Unid. Estoque','Fornecedores'],
     rows:S.products.map(p=>({'ID':p.id,'Nome':p.name,'Categoria':p.cat,'Unid. Compra':p.purchaseUnit,'Unid. Estoque':p.stockUnit,'Fator':p.convFactor,'Custo/Unid. Compra (R$)':p.purchaseCost,'Custo/Unid. Estoque (R$)':p.cost,
-      'Sub-unidade':p.subUnitLabel||'','Qtd Sub-unid.':p.subUnitQty||null,'Est. Mínimo':p.min,'Prazo Entrega (dias)':p.leadTime,'Controla Validade':p.tracksExpiry?'Sim':'Não','Fornecedores':(p.supps||[]).map(sname).join(', ')}))});
+      'Sub-unidade':p.subUnitLabel||'','Qtd Sub-unid.':p.subUnitQty||null,'Est. Mínimo':p.min,'Prazo Entrega (dias)':p.leadTime,'Controla Validade':p.tracksExpiry?'Sim':'Não','Preço Cobrado (R$)':p.salePrice||null,'Exames por Unid. Estoque':p.examsPerUnit||null,'Fornecedores':(p.supps||[]).map(sname).join(', ')}))});
+  const mgx=stockMargin(rep);
+  sheets.push({name:'Margem Potencial Estoque', cols:['Produto','Estoque Atual','Unid. Estoque','Custo/Unid. Estoque (R$)','Custo do Estoque (R$)','Exames por Unid.','Exames Possíveis','Preço Cobrado (R$)','Receita Potencial (R$)','Margem Potencial (R$)','Margem Potencial %','Situação (estimativa, não é lucro realizado)'],
+    rows:mgx.rows.map(x=>({'Produto':x.p.name,'Estoque Atual':x.qty,'Unid. Estoque':x.unit,'Custo/Unid. Estoque (R$)':x.cost,'Custo do Estoque (R$)':x.costVal,'Exames por Unid.':x.examsPerUnit||null,'Exames Possíveis':x.exams,'Preço Cobrado (R$)':x.price||null,'Receita Potencial (R$)':x.revenue,'Margem Potencial (R$)':x.margin,'Margem Potencial %':x.pct,'Situação (estimativa, não é lucro realizado)':x.status==='ok'?'Calculado':(MG_STATUS[x.status]||x.status)}))});
+  sheets.push({name:'Exames Realizados', cols:['Início','Fim','Exame','Quantidade','Granularidade','Arquivo'], rows:(S.examVols||[]).map(v=>({'Início':v.start,'Fim':v.end,'Exame':v.exam,'Quantidade':v.qty,'Granularidade':(S.raw.exam_volumes||[]).find(r=>r.id===v.id)?.granularity||'','Arquivo':v.file}))});
   sheets.push({name:'Fornecedores', cols:['ID','Nome','Contato','Telefone'], rows:S.suppliers.map(s=>({'ID':s.id,'Nome':s.name,'Contato':s.contact||'','Telefone':s.phone||''}))});
   sheets.push({name:'Unidades', cols:['Unidade'], rows:(S.units||[]).map(u=>({'Unidade':u.name}))});
   sheets.push({name:'Plano Semanal', cols:['Semana (início)','Saldo Inicial (R$)','Recebimentos (R$)','Pagamentos (R$)','Saldo Final (R$)','Compras Planejadas (R$)','Obs.'],
@@ -1723,11 +1912,13 @@ function buildExportData(filter){
     purchase_plan:pick('purchase_plan',ids(plan)),
     commitments:pick('commitments',ids(commits)),
     commitment_installments:pick('commitment_installments',ids(insts)),
+    exam_volumes:RAW.exam_volumes||[],
     app_settings:RAW.app_settings||[]
   };
-  const calc={}; sheets.slice(1).forEach(sh=>{ if(['CMV por Período','Faturamento Mensal','Lotes','Reposição e Validade','Compras Parceladas'].includes(sh.name)) calc[sh.name]=sh.rows; });
-  return {meta:{sistema:'PetLab — Controle de Estoque', versao:'v7', gerado_em:new Date().toISOString(), filtro:{...filter, descricao:descr}}, sheets, raw, calc};
+  const calc={}; sheets.slice(1).forEach(sh=>{ if(['CMV por Período','Faturamento Mensal','Lotes','Reposição e Validade','Compras Parceladas','Margem Potencial Estoque'].includes(sh.name)) calc[sh.name]=sh.rows; });
+  return {meta:{sistema:'PetLab — Controle de Estoque', versao:'v7.2', gerado_em:new Date().toISOString(), filtro:{...filter, descricao:descr}}, sheets, raw, calc};
 }
+const MG_STATUS={'sem-preco':'Falta preço','sem-rendimento':'Falta rendimento (exames por unidade)','sem-custo':'Sem custo','sem-estoque':'Sem estoque','sem-contagem':'Sem contagem'};
 const STATUS_LABEL={'atrasado':'Pedido atrasado','esta-semana':'Pedir esta semana','abaixo-minimo':'Abaixo do mínimo','sem-historico':'Sem histórico de consumo','sem-contagem':'Sem contagem','ok':'OK'};
 // Monta uma planilha com formatos: datas como data, R$ com 2 casas, % como percentual
 function sheetFromRows(XLSXlib, sh){
@@ -1764,7 +1955,7 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // ─── STATE ────────────────────────────────────────────────────
 let S = { products:[], suppliers:[], periods:[], counts:[], purchases:[], units:[], plan:[], commits:[], installments:[],
-          losses:[], monthlyRevenue:[], settings:{}, raw:{} };
+          losses:[], monthlyRevenue:[], examVols:[], settings:{}, raw:{} };
 let prodCatFilter = '';
 let repFilter = 'acao';
 
@@ -1783,7 +1974,7 @@ function toast(msg, type='ok'){
 async function loadAll(){
   setLoading(true);
   try {
-    await Promise.all([loadSuppliers(), loadProducts(), loadPeriods(), loadCounts(), loadPurchases(), loadUnits(), loadPlan(), loadCommitments(), loadLosses(), loadRevenue(), loadSettings()]);
+    await Promise.all([loadSuppliers(), loadProducts(), loadPeriods(), loadCounts(), loadPurchases(), loadUnits(), loadPlan(), loadCommitments(), loadLosses(), loadRevenue(), loadSettings(), loadExams()]);
     // Regra P1: cada período abre com o fechamento do anterior (só preenche aberturas vazias)
     const links = computeChainLinks();
     if(links.length){
@@ -1837,6 +2028,8 @@ async function loadProducts(){
       leadTime: (p.lead_time_days===null||p.lead_time_days===undefined) ? LEAD_TIME_PADRAO : parseInt(p.lead_time_days),
       // sem a coluna (migração não rodada) usa a regra por categoria
       tracksExpiry: (p.tracks_expiry===null||p.tracks_expiry===undefined) ? CATS_VALIDADE.includes(p.cat) : !!p.tracks_expiry,
+      salePrice: parseFloat(p.sale_price)||0,          // preço cobrado por exame (informado pela equipe)
+      examsPerUnit: parseFloat(p.exams_per_unit)||0,   // exames que rendem 1 unidade de estoque (informado)
       supps: ps.filter(x => x.product_id === p.id).map(x => x.supplier_id)
     };
   });
@@ -1949,6 +2142,160 @@ async function loadLosses(){
   S.losses = data.map(l=>({id:l.id, periodId:l.period_id, prodId:l.product_id, date:l.date,
     qty:parseFloat(l.qty)||0, reason:l.reason||'Outro', snap:parseFloat(l.cost_snapshot)||0, notes:l.notes||''}));
 }
+// ─── MARGEM POTENCIAL (painel na Reposição) ───────────────────
+const MG_MSG={'sem-preco':'Falta o preço cobrado','sem-rendimento':'Falta informar quantos exames rende 1 unidade','sem-custo':'Sem custo cadastrado'};
+function renderMargin(rep){
+  const mg=stockMargin(rep), t=mg.tot;
+  const cards=document.getElementById('mg-cards'); if(!cards) return;
+  cards.innerHTML=`
+    <div class="stat-card"><div class="lbl">Custo do Estoque (itens calculados)</div><div class="val">${R(t.costVal)}</div><div class="sub">${t.n} de ${t.nComEstoque} produtos com estoque</div></div>
+    <div class="stat-card"><div class="lbl">Receita Potencial</div><div class="val">${R(t.revenue)}</div><div class="sub">Exames possíveis × preço cobrado</div></div>
+    <div class="stat-card"><div class="lbl">Margem Potencial</div><div class="val">${R(t.margin)}</div><div class="sub">${t.pct!==null?P(t.pct)+' da receita potencial':'—'}</div></div>
+    <div class="stat-card c-warn"><div class="lbl">Fora do Cálculo</div><div class="val">${R(t.costValSemDados)}</div><div class="sub">Custo de estoque sem preço ou rendimento</div></div>`;
+  const ord={'ok':0,'sem-rendimento':1,'sem-preco':2,'sem-custo':3,'sem-estoque':4,'sem-contagem':5};
+  const list=[...mg.rows].filter(x=>x.status!=='sem-estoque').sort((a,b)=>ord[a.status]-ord[b.status]||a.p.name.localeCompare(b.p.name));
+  document.getElementById('mg-tbody').innerHTML=list.length?list.map(x=>{
+    const su=x.unit;
+    if(x.status!=='ok') return `<tr><td><strong>${x.p.name}</strong><div class="rp-tag">${x.p.cat}</div></td>
+      <td style="text-align:right" class="mono">${x.status==='sem-contagem'?'—':N(x.qty,2)+' <span class="text-muted" style="font-size:11px">'+su+'</span>'}</td>
+      <td style="text-align:right" class="mono">${x.status==='sem-contagem'?'—':R(x.costVal)}</td>
+      <td colspan="5"><span class="badge b-gray">${x.status==='sem-contagem'?'Sem contagem':(MG_MSG[x.status]||x.status)}</span>
+        ${x.status!=='sem-contagem'?`<button class="btn btn-sm btn-outline" style="margin-left:6px" onclick="editProduct(${x.p.id})">Preencher</button>`:''}</td></tr>`;
+    return `<tr><td><strong>${x.p.name}</strong><div class="rp-tag">${x.p.cat}</div></td>
+      <td style="text-align:right" class="mono">${N(x.qty,2)} <span class="text-muted" style="font-size:11px">${su}</span></td>
+      <td style="text-align:right" class="mono">${R(x.costVal)}<div class="rp-tag">${R(x.cost)}/${su}</div></td>
+      <td style="text-align:right" class="mono">${N(x.exams,1)}<div class="rp-tag">${N(x.examsPerUnit,2)} por ${su}</div></td>
+      <td style="text-align:right" class="mono">${R(x.price)}</td>
+      <td style="text-align:right" class="mono">${R(x.revenue)}</td>
+      <td style="text-align:right" class="mono fw6 ${x.margin<0?'text-danger':''}">${R(x.margin)}</td>
+      <td style="text-align:right">${x.pct!==null?P(x.pct):'—'}</td></tr>`;
+  }).join(''):'<tr><td colspan="8"><div class="empty"><p>Faça a contagem de implantação para calcular.</p></div></td></tr>';
+}
+
+// ─── EXAMES REALIZADOS: importação configurável + sazonalidade ──
+let EX={wb:null, rows:[], fileName:'', val:null};
+const EX_COLS=['date','dateEnd','exam','qty'];
+function exColLabel(i){ let s='',n=i; do{ s=String.fromCharCode(65+n%26)+s; n=Math.floor(n/26)-1; }while(n>=0); return s; }
+function exLoadFile(inp){
+  const f=inp.files&&inp.files[0]; if(!f) return;
+  if(typeof XLSX==='undefined'){ alert('A biblioteca de Excel não carregou (verifique a internet).'); return; }
+  EX.fileName=f.name; const rd=new FileReader();
+  const isCsv=/\.(csv|txt)$/i.test(f.name);
+  rd.onload=e=>{
+    try{
+      // CSV é lido como texto cru: o Excel/SheetJS não pode reinterpretar datas dd/mm como mm/dd
+      EX.wb=isCsv ? XLSX.read(e.target.result,{type:'string',raw:true}) : XLSX.read(e.target.result,{type:'array'});
+      document.getElementById('ex-sheet').innerHTML=EX.wb.SheetNames.map((n,i)=>`<option value="${i}">${n}</option>`).join('');
+      exSheetChange();
+    }catch(err){ alert('Não consegui ler o arquivo: '+err.message); }
+  };
+  if(isCsv) rd.readAsText(f); else rd.readAsArrayBuffer(f);
+}
+function exSheetChange(){
+  const ws=EX.wb.Sheets[EX.wb.SheetNames[parseInt(document.getElementById('ex-sheet').value)||0]];
+  EX.rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:null,blankrows:false});
+  document.getElementById('ex-hdr').value=1;
+  document.getElementById('ex-map').style.display='block';
+  exRebuild(true);
+}
+function exRebuild(auto){
+  const h=Math.max(1,parseInt(document.getElementById('ex-hdr').value)||1);
+  const head=EX.rows[h-1]||[]; const ncol=Math.max(head.length,...EX.rows.slice(h,h+50).map(r=>r.length),0);
+  const opts=['<option value="">— não usar —</option>'].concat(Array.from({length:ncol},(_,i)=>`<option value="${i}">${exColLabel(i)}: ${head[i]!==null&&head[i]!==undefined&&String(head[i]).trim()!==''?String(head[i]).trim():'(sem título)'}</option>`)).join('');
+  const prev={}; EX_COLS.forEach(c=>prev[c]=document.getElementById('ex-c-'+c).value);
+  EX_COLS.forEach(c=>document.getElementById('ex-c-'+c).innerHTML=opts);
+  // Reaproveita o mapeamento salvo só se os títulos do arquivo forem os mesmos (nunca adivinha)
+  const saved=(S.settings&&S.settings.exam_map)?(()=>{try{return JSON.parse(S.settings.exam_map);}catch(e){return null;}})():null;
+  const titles=head.map(x=>String(x??'').trim());
+  EX_COLS.forEach(c=>{
+    let v=prev[c];
+    if(auto && saved && saved.map && saved.map[c]){ const i=titles.indexOf(saved.map[c]); if(i>=0) v=String(i); }
+    document.getElementById('ex-c-'+c).value=v||'';
+  });
+  if(auto && saved && saved.gran) document.getElementById('ex-gran').value=saved.gran;
+  exPreview();
+}
+function exReadMap(){ const g=id=>document.getElementById(id).value; return {date:g('ex-c-date')===''?null:+g('ex-c-date'),dateEnd:g('ex-c-dateEnd')===''?null:+g('ex-c-dateEnd'),exam:g('ex-c-exam')===''?null:+g('ex-c-exam'),qty:g('ex-c-qty')===''?null:+g('ex-c-qty')}; }
+function exPreview(){
+  const box=document.getElementById('ex-preview'), btn=document.getElementById('ex-import-btn');
+  const h=Math.max(1,parseInt(document.getElementById('ex-hdr').value)||1);
+  const gran=document.getElementById('ex-gran').value;
+  document.getElementById('ex-c-dateEnd-grp').style.display=gran==='intervalo'?'block':'none';
+  const body=EX.rows.slice(h), map=exReadMap();
+  const raw=body.slice(0,6).map(r=>`<tr>${(EX.rows[h-1]||[]).map((_,i)=>`<td style="font-size:12px">${r[i]===null||r[i]===undefined?'':String(r[i])}</td>`).join('')}</tr>`).join('');
+  let html=`<div class="conv-hint" style="margin:10px 0 4px">Como o arquivo foi lido (primeiras linhas, sem nenhuma interpretação):</div>
+    <div class="tbl-wrap" style="max-height:170px;overflow:auto"><table><thead><tr>${(EX.rows[h-1]||[]).map((c,i)=>`<th>${exColLabel(i)}: ${c??''}</th>`).join('')}</tr></thead><tbody>${raw}</tbody></table></div>`;
+  const v=validateExamRows(body,map,gran,h+1); EX.val=v;
+  if(v.fatal){ html+=`<div class="alert alert-warn" style="margin-top:10px"><span>👉</span><span>${v.fatal}</span></div>`; btn.disabled=true; box.innerHTML=html; return; }
+  const ag=aggregateExams(v.valid);
+  html+=`<div class="conv-hint" style="margin:12px 0 4px">Como o sistema vai interpretar (confira as datas, o formato assumido é dia/mês/ano):</div>
+    <div class="tbl-wrap"><table><thead><tr><th>Linha</th><th>Início</th><th>Fim</th><th>Exame</th><th style="text-align:right">Qtd</th></tr></thead><tbody>${v.valid.slice(0,6).map(x=>`<tr><td>${x.line}</td><td>${fmtDate(x.start)}</td><td>${fmtDate(x.end)}</td><td>${x.exam}</td><td style="text-align:right" class="mono">${N(x.qty,2)}</td></tr>`).join('')||'<tr><td colspan="5" class="text-muted">Nenhuma linha válida</td></tr>'}</tbody></table></div>
+    <div class="stats-grid" style="margin-top:12px">
+      <div class="stat-card ${v.valid.length?'c-ok':'c-danger'}"><div class="lbl">Linhas válidas</div><div class="val">${v.valid.length}</div><div class="sub">${v.blank} em branco ignoradas</div></div>
+      <div class="stat-card ${v.errors.length?'c-danger':'c-ok'}"><div class="lbl">Linhas com erro</div><div class="val">${v.errors.length}</div><div class="sub">${v.duplicates?v.duplicates+' repetidas (serão somadas)':'Sem repetidas'}</div></div>
+      <div class="stat-card"><div class="lbl">Período lido</div><div class="val" style="font-size:16px">${v.first?fmtDate(v.first)+' a '+fmtDate(v.last):'—'}</div><div class="sub">${ag.length} mês(es)</div></div>
+      <div class="stat-card"><div class="lbl">Total de exames</div><div class="val">${N(v.total,0)}</div><div class="sub">${v.exams.size} tipo(s) de exame</div></div></div>`;
+  if(v.errors.length) html+=`<div class="alert alert-warn" style="margin-top:10px"><span>⚠️</span><span><strong>Linhas com erro (primeiras 8):</strong><br>${v.errors.slice(0,8).map(e=>`linha ${e.line}: ${e.msg}`).join('<br>')}${v.errors.length>8?`<br>… e mais ${v.errors.length-8}`:''}</span></div>`;
+  box.innerHTML=html;
+  btn.disabled = !v.valid.length || (v.errors.length>0 && !document.getElementById('ex-ignore').checked);
+}
+async function exImport(){
+  const v=EX.val; if(!v||!v.valid.length) return;
+  if(v.errors.length && !document.getElementById('ex-ignore').checked){ alert('Há linhas com erro. Corrija o arquivo ou marque para ignorá-las.'); return; }
+  const replace=document.getElementById('ex-replace').checked;
+  if(!confirm(`Importar ${v.valid.length} linhas (${fmtDate(v.first)} a ${fmtDate(v.last)})${replace?'\nOs registros já importados dentro desse intervalo serão substituídos.':''}`)) return;
+  setLoading(true);
+  try{
+    const batch='imp_'+Date.now(), gran=document.getElementById('ex-gran').value;
+    if(replace){ const {error:eD}=await sb.from('exam_volumes').delete().gte('period_start',v.first).lte('period_end',v.last); if(eD) throw eD; }
+    const recs=v.valid.map(x=>({period_start:x.start,period_end:x.end,exam_name:x.exam,qty:x.qty,granularity:gran,batch_id:batch,source_file:EX.fileName}));
+    for(let i=0;i<recs.length;i+=500){ const {error}=await sb.from('exam_volumes').insert(recs.slice(i,i+500)); if(error) throw error; }
+    // guarda o mapeamento (pelos títulos das colunas) só para facilitar a próxima importação
+    const h=Math.max(1,parseInt(document.getElementById('ex-hdr').value)||1), head=(EX.rows[h-1]||[]).map(x=>String(x??'').trim()), m=exReadMap(), mm={};
+    EX_COLS.forEach(c=>{ if(m[c]!==null) mm[c]=head[m[c]]; });
+    await sb.from('app_settings').upsert({key:'exam_map', value:JSON.stringify({map:mm,gran})});
+    toast(`${recs.length} linhas importadas.`);
+    EX.wb=null; EX.rows=[]; document.getElementById('ex-file').value=''; document.getElementById('ex-map').style.display='none';
+    await loadAll();
+  }catch(e){ alert('Erro ao importar: '+e.message+(/exam_volumes|relation|schema/i.test(e.message)?'\n\nRode antes a migração v7.2 (migracao_v7_2.sql) no Supabase.':'')); }
+  finally{ setLoading(false); }
+}
+async function exDeleteBatch(batch){
+  if(!confirm('Apagar todos os registros dessa importação?')) return;
+  setLoading(true); await sb.from('exam_volumes').delete().eq('batch_id',batch); toast('Importação apagada.'); await loadAll(); setLoading(false);
+}
+function renderExames(){
+  const vols=S.examVols||[]; const box=document.getElementById('ex-result'); if(!box) return;
+  if(!vols.length){ box.innerHTML='<div class="empty"><div class="ei">🧪</div><h3>Nenhum dado de exames importado</h3><p>Importe a planilha do sistema do laboratório acima.</p></div>'; return; }
+  const ag=aggregateExams(vols), se=seasonality(ag);
+  const first=vols.reduce((a,v)=>a<v.start?a:v.start,'9999'), last=vols.reduce((a,v)=>a>v.end?a:v.end,'0000');
+  const tot={}; vols.forEach(v=>tot[v.exam]=(tot[v.exam]||0)+v.qty);
+  const top=Object.entries(tot).sort((a,b)=>b[1]-a[1]).slice(0,10);
+  const batches={}; vols.forEach(v=>{ const b=(batches[v.batch]=batches[v.batch]||{batch:v.batch,file:v.file,n:0,qty:0}); b.n++; b.qty+=v.qty; });
+  box.innerHTML=`
+    <div class="alert ${se.confiavel?'alert-info':'alert-warn'}"><span>${se.confiavel?'ℹ️':'⚠️'}</span><span>${se.confiavel
+      ?'Índice = exames do mês ÷ média mensal dos meses carregados.'
+      :`<strong>Apenas ${se.n} mês(es) de dados.</strong> O índice abaixo é só indicativo: sazonalidade confiável exige pelo menos 12 meses. O último mês pode estar incompleto.`}
+      Estes números <strong>ainda não alteram</strong> as sugestões de compra: falta a correspondência entre exames e insumos.</span></div>
+    <div class="panel"><div class="panel-hdr"><span class="panel-ttl">Exames por mês (${fmtDate(first)} a ${fmtDate(last)})</span></div><div class="tbl-wrap"><table>
+      <thead><tr><th>Mês</th><th style="text-align:right">Exames</th><th style="text-align:right">Var. vs mês anterior</th><th style="text-align:right">Índice (média = 1,00)</th></tr></thead><tbody>
+      ${se.rows.map(r=>`<tr><td>${monthLabel(r.ym)}</td><td style="text-align:right" class="mono fw6">${N(r.total,0)}</td><td style="text-align:right">${r.delta!==null?(r.delta>=0?'+':'')+P(r.delta):'—'}</td><td style="text-align:right" class="mono">${r.idx!==null?N(r.idx,2):'—'}</td></tr>`).join('')}
+      </tbody></table></div></div>
+    <div class="panel"><div class="panel-hdr"><span class="panel-ttl">Exames mais frequentes (todo o período importado)</span></div><div class="tbl-wrap"><table>
+      <thead><tr><th>Exame</th><th style="text-align:right">Quantidade</th><th style="text-align:right">% do total</th></tr></thead><tbody>
+      ${top.map(([n,q])=>`<tr><td>${n}</td><td style="text-align:right" class="mono">${N(q,0)}</td><td style="text-align:right">${P(q/Object.values(tot).reduce((s,x)=>s+x,0))}</td></tr>`).join('')}
+      </tbody></table></div></div>
+    <div class="panel"><div class="panel-hdr"><span class="panel-ttl">Importações feitas</span></div><div class="tbl-wrap"><table>
+      <thead><tr><th>Arquivo</th><th style="text-align:right">Linhas</th><th style="text-align:right">Exames</th><th></th></tr></thead><tbody>
+      ${Object.values(batches).map(b=>`<tr><td>${b.file||'—'}</td><td style="text-align:right" class="mono">${b.n}</td><td style="text-align:right" class="mono">${N(b.qty,0)}</td><td><button class="btn btn-sm btn-outline" style="color:var(--danger)" onclick="exDeleteBatch('${b.batch}')">Apagar</button></td></tr>`).join('')}
+      </tbody></table></div></div>`;
+}
+async function loadExams(){
+  const {data,error} = await sb.from('exam_volumes').select('*').order('period_start');
+  if(error){ S.examVols=[]; S.raw.exam_volumes=[]; return; } // tabela pode não existir ainda
+  S.raw.exam_volumes = data;
+  S.examVols = data.map(x=>({id:x.id,start:x.period_start,end:x.period_end,exam:x.exam_name,qty:parseFloat(x.qty)||0,batch:x.batch_id||'',file:x.source_file||''}));
+}
 async function loadRevenue(){
   const {data,error} = await sb.from('monthly_revenue').select('*').order('month');
   if(error){ S.monthlyRevenue=[]; S.raw.monthly_revenue=[]; return; }
@@ -1979,6 +2326,7 @@ function renderAll(){
   renderCounts(); renderPurchases(); renderDashboard(); updateAlertBadge();
   renderCommitments(); updateCommitBadge(); renderLosses(); updateRepBadge();
   if(document.getElementById('section-reposicao').classList.contains('active')) renderReposicao();
+  if(document.getElementById('section-exames').classList.contains('active')) renderExames();
   if(document.getElementById('section-alertas').classList.contains('active')) renderAlerts();
   // Não redesenha o que a pessoa está digitando (evita perder o foco)
   const ae = document.activeElement;
@@ -1994,7 +2342,7 @@ const PT = {
   dashboard:'Dashboard',periodos:'Períodos',contagem:'Contagem de Estoque',
   compras:'Compras',perdas:'Perdas e Baixas',reposicao:'Reposição e Validade',
   planejamento:'Planejamento Semanal de Caixa',parcelamentos:'Caixa e Compras — Cronograma de Desembolso',cmv:'CMV — Custo das Mercadorias Vendidas',
-  produtos:'Produtos',fornecedores:'Fornecedores',unidades:'Unidades',alertas:'Alertas de Estoque'
+  exames:'Exames Realizados e Sazonalidade',produtos:'Produtos',fornecedores:'Fornecedores',unidades:'Unidades',alertas:'Alertas de Estoque'
 };
 function go(page){
   document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
@@ -2020,6 +2368,7 @@ function go(page){
   if(page==='planejamento') renderPlan();
   if(page==='parcelamentos') renderCommitments();
   if(page==='reposicao') renderReposicao();
+  if(page==='exames') renderExames();
   if(page==='perdas') renderLosses();
 }
 
@@ -2783,7 +3132,7 @@ function onCountPeriodChange(){
     const herdada = h && (S.counts.find(c=>c.id===p.openCountId)||{}).periodId!==p.id;
     ts.innerHTML=`<option value="abertura"${h?' disabled':''}>Abertura${h?(herdada?' (✓ = fechamento anterior)':' (✓ feita)'):''}</option><option value="fechamento"${!h?' disabled':''}>Fechamento${!h?' (aguarda abertura)':''}</option>`;
     ts.value=h?'fechamento':'abertura';
-    if(h && p.end) document.getElementById('cnt-date').value = (today()>p.end ? p.end : today());
+    if(h) document.getElementById('cnt-date').value = today();   // data REAL da contagem (segunda, terça, qualquer dia)
   }
 }
 function buildCountTable(){
@@ -2852,8 +3201,15 @@ async function saveCount(){
 
   const targetPeriod=S.periods.find(x=>x.id===periodId);
 
+  // A semana termina no dia da contagem de fechamento (segunda, terça, qualquer dia)
+  const align = (type==='fechamento') ? planClosingAlignment(S.periods, targetPeriod, date) : null;
+  let doAlign=false;
+  if(align){
+    const nx=align.next?S.periods.find(x=>x.id===align.next.id):null;
+    doAlign=confirm(`A contagem de fechamento (${fmtDate(date)}) não é no dia do fim previsto da semana (${fmtDate(targetPeriod.end)}).\n\nAjustar esta semana para terminar em ${fmtDate(date)}`+(nx?` e a próxima ("${nx.label}") para começar em ${fmtDate(align.next.newStart)}`:'')+`?\n\nOK = ajustar as datas.\nCancelar = manter as datas atuais (o sistema vai pedir outra confirmação).`);
+  }
   // Validação 4: data fora do intervalo do período — avisa, não bloqueia
-  if(!confirmDateWithinPeriod(targetPeriod, date)) return;
+  if(!doAlign && !confirmDateWithinPeriod(targetPeriod, date)) return;
   // Fechamento não pode ser antes da abertura
   if(type==='fechamento' && targetPeriod.openCountId){
     const oc=S.counts.find(c=>c.id===targetPeriod.openCountId);
@@ -2913,6 +3269,17 @@ async function saveCount(){
     const {error:eField}=await sb.from('periods').update({[dbField]:countId}).eq('id',periodId);
     if(eField) throw eField;
 
+    if(doAlign){
+      const oldAuto='Semana '+fmtDate(targetPeriod.start)+' – '+fmtDate(targetPeriod.end);
+      const upd={end_date:align.newEnd}; if(targetPeriod.label===oldAuto) upd.label='Semana '+fmtDate(targetPeriod.start)+' – '+fmtDate(align.newEnd);
+      const {error:eA}=await sb.from('periods').update(upd).eq('id',targetPeriod.id); if(eA) throw eA;
+      if(align.next){
+        const nx=S.periods.find(x=>x.id===align.next.id);
+        const oldN='Semana '+fmtDate(nx.start)+' – '+fmtDate(nx.end);
+        const u2={start_date:align.next.newStart}; if(nx.label===oldN) u2.label='Semana '+fmtDate(align.next.newStart)+' – '+fmtDate(nx.end);
+        const {error:eB}=await sb.from('periods').update(u2).eq('id',nx.id); if(eB) throw eB;
+      }
+    }
     closeM('m-count');
     toast(editId?'Contagem atualizada!':'Contagem salva!');
     await loadAll();   // loadAll encadeia a abertura do período seguinte (regra P1)
@@ -3591,6 +3958,8 @@ function openProductModal(id){
     document.getElementById('prod-m-subqty').value=p.subUnitQty||'';
     document.getElementById('prod-m-lead').value=p.leadTime;
     document.getElementById('prod-m-exp').checked=!!p.tracksExpiry;
+    document.getElementById('prod-m-price').value=p.salePrice>0?p.salePrice:'';
+    document.getElementById('prod-m-epu').value=p.examsPerUnit>0?p.examsPerUnit:'';
     Array.from(ss.options).forEach(o=>o.selected=p.supps.includes(parseInt(o.value)));
   } else {
     document.getElementById('prod-m-title').textContent='Novo Produto';
@@ -3605,6 +3974,7 @@ function openProductModal(id){
     document.getElementById('prod-m-subqty').value='';
     document.getElementById('prod-m-lead').value=LEAD_TIME_PADRAO;
     document.getElementById('prod-m-exp').checked=false;
+    document.getElementById('prod-m-price').value=''; document.getElementById('prod-m-epu').value='';
     Array.from(ss.options).forEach(o=>o.selected=false);
   }
   calcProdStockCost(); // Atualiza campos calculados
@@ -3631,6 +4001,10 @@ async function saveProduct(){
   if(!cat){alert('Selecione uma categoria.');return;}
   if(!pu){alert('Informe a Unidade de Compra.');return;}
   if(!su){alert('Informe a Unidade de Estoque.');return;}
+  const priceV=document.getElementById('prod-m-price').value, epuV=document.getElementById('prod-m-epu').value;
+  if((priceV!==''&&num(priceV)<0)||(epuV!==''&&num(epuV)<0)){alert('Preço e rendimento não podem ser negativos.');return;}
+  const hasPriceCols = !(S.raw.products||[]).length || ('sale_price' in S.raw.products[0]);
+  if((priceV!==''||epuV!=='') && !hasPriceCols){ alert('Para salvar preço e rendimento, rode antes a migração v7.2 (migracao_v7_2.sql) no Supabase.'); return; }
 
   setLoading(true);
   try{
@@ -3648,6 +4022,10 @@ async function saveProduct(){
       lead_time_days: parseInt(document.getElementById('prod-m-lead').value)||LEAD_TIME_PADRAO,
       tracks_expiry: document.getElementById('prod-m-exp').checked
     };
+    if(hasPriceCols){
+      productData.sale_price = priceV===''?null:num(priceV);
+      productData.exams_per_unit = epuV===''?null:num(epuV);
+    }
     if(id){
       await sb.from('products').update(productData).eq('id',prodId);
     } else {
@@ -3800,9 +4178,10 @@ function renderReposicao(){
   document.getElementById('rp-stat-risco').textContent=R(risco);
   document.getElementById('rp-card-risco').className='stat-card '+(risco>0?'c-danger':'c-ok');
   document.getElementById('rp-stat-risco-sub').textContent=rep.rows.filter(r=>r.riskVal>0).length+' produto(s) com lote que vence antes de ser usado';
-  const ex=rep.rows.flatMap(r=>r.res.lots.filter(l=>l.exitDate).map(l=>({q:l.qtyIn,d:daysBetween(l.entry,l.exitDate)})));
+  const ex=rep.rows.flatMap(r=>r.exitedWin.map(l=>({q:l.qtyIn,d:daysBetween(l.entry,l.exitDate)})));
   const wq=ex.reduce((s,x)=>s+x.q,0);
   document.getElementById('rp-stat-dias').textContent=wq>0?N(ex.reduce((s,x)=>s+x.q*x.d,0)/wq,0)+' dias':'—';
+  renderMargin(rep);
 
   // Semanas
   const weeks=replenishmentWeeks(8,rep);
@@ -3843,7 +4222,7 @@ function renderReposicao(){
       <td>${r.sugUnits!==null?`${r.sugUnits} ${r.p.purchaseUnit}<div class="rp-tag">${R(r.sugCost)}</div>`:'—'}</td>
       <td>${r.nearestExpiry?`<span class="badge ${expCls}">${fmtDate(r.nearestExpiry)}</span>`:(r.p.tracksExpiry?'<span class="badge b-warn" title="Produto controla validade mas nenhum lote em estoque tem data">sem data</span>':'<span class="text-muted">—</span>')}</td>
       <td style="text-align:right" class="mono ${r.riskVal>0?'text-danger fw6':'text-muted'}">${r.riskVal>0?R(r.riskVal)+`<div class="rp-tag">${N(r.riskQty,2)} ${su}</div>`:'—'}</td>
-      <td style="text-align:right" class="mono">${r.avgDays!==null?N(r.avgDays,0)+' d':'—'}</td>
+      <td style="text-align:right" class="mono" ${r.avgDaysAll!==null?`title="Histórico completo: ${N(r.avgDaysAll,0)} dias"`:''}>${r.avgDays!==null?N(r.avgDays,0)+' d':'—'}</td>
       <td><button class="btn btn-sm btn-outline" onclick="showLots(${r.p.id})">Lotes</button></td>
     </tr>`;
   }).join('');
