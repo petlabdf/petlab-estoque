@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PetLab — Controle de Estoque v7</title>
+<title>PetLab — Controle de Estoque v7.3</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
@@ -207,9 +207,34 @@ input[readonly]{background:#F8FAFC;cursor:default;color:var(--primary-d);font-we
 .cc-total-chk{display:flex;align-items:center;gap:8px;justify-content:flex-end;margin-top:10px;font-size:12.5px}
 .cc-bar{height:6px;background:#E2E8F0;border-radius:100px;overflow:hidden;width:90px}
 .cc-bar span{display:block;height:100%;background:var(--primary)}
+
+/* ── GUIA DE USO ─────────────────────────────────────────────── */
+.gd-flow{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;margin:6px 0 4px}
+.gd-step{flex:1;min-width:150px;background:#F8FAFC;border:1px solid var(--border);border-radius:9px;padding:12px 14px;position:relative}
+.gd-step .n{width:22px;height:22px;border-radius:50%;background:var(--primary);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-bottom:6px}
+.gd-step .t{font-weight:700;font-size:13px;margin-bottom:3px}
+.gd-step .d{font-size:12px;color:var(--muted);line-height:1.45}
+.gd-arrow{display:flex;align-items:center;padding:0 6px;color:var(--primary);font-weight:700;font-size:16px}
+.gd-rule{display:flex;gap:10px;align-items:flex-start;font-size:13px;line-height:1.5;padding:7px 0;border-bottom:1px solid #F1F5F9}
+.gd-rule:last-child{border-bottom:none}
 </style>
 </head>
 <body>
+
+<!--
+  ═══ MIGRAÇÃO v7.3 (rodar UMA vez; está também em migracao_v7_3.sql) ═══
+  Só adiciona colunas. Sem ela o sistema funciona, mas não grava os campos novos
+  (forma de pagamento da nota, aviso de validade por produto, insumo compartilhado, siglas).
+
+ALTER TABLE commitments
+  ADD COLUMN IF NOT EXISTS invoice_number TEXT,
+  ADD COLUMN IF NOT EXISTS payment_terms  TEXT;      -- 'vista' | 'parc' | 'tbd'
+ALTER TABLE products
+  ADD COLUMN IF NOT EXISTS expiry_alert_days INT,     -- avisar vencimento N dias antes (vazio = automático)
+  ADD COLUMN IF NOT EXISTS shared_use        BOOLEAN DEFAULT false, -- insumo usado em vários exames / apoio
+  ADD COLUMN IF NOT EXISTS exam_codes        TEXT;    -- siglas do Workvet que usam o insumo (ex: HEMO, FHEMO)
+ALTER TABLE products ALTER COLUMN min_stock DROP NOT NULL;  -- vazio = produto sem estoque mínimo
+-->
 
 <!--
   ═══ MIGRAÇÃO v7.2 (rodar UMA vez; está também em migracao_v7_2.sql) ═══
@@ -438,13 +463,15 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
     <div class="nav-lbl">Financeiro</div>
     <div class="nav-item" id="nav-reposicao" onclick="go('reposicao')"><span class="ni">🔄</span>Reposição e Validade<span class="nb" id="rep-badge">0</span></div>
     <div class="nav-item" id="nav-exames" onclick="go('exames')"><span class="ni">🧪</span>Exames Realizados</div>
-    <div class="nav-item" id="nav-planejamento" onclick="go('planejamento')"><span class="ni">🗓️</span>Planejamento Semanal</div>
+    <div class="nav-item" id="nav-planejamento" onclick="go('planejamento')" style="display:none"><span class="ni">🗓️</span>Planejamento Semanal</div>
     <div class="nav-item" id="nav-parcelamentos" onclick="go('parcelamentos')"><span class="ni">💳</span>Caixa e Compras<span class="nb" id="cc-badge">0</span></div>
     <div class="nav-lbl">Cadastros</div>
     <div class="nav-item" id="nav-produtos" onclick="go('produtos')"><span class="ni">📦</span>Produtos</div>
     <div class="nav-item" id="nav-fornecedores" onclick="go('fornecedores')"><span class="ni">🏭</span>Fornecedores</div>
     <div class="nav-item" id="nav-unidades" onclick="go('unidades')"><span class="ni">📐</span>Unidades</div>
     <div class="nav-item" id="nav-alertas" onclick="go('alertas')"><span class="ni">🔔</span>Alertas<span class="nb" id="alert-badge">0</span></div>
+    <div class="nav-lbl">Ajuda</div>
+    <div class="nav-item" id="nav-guia" onclick="go('guia')"><span class="ni">📘</span>Guia de Uso</div>
   </nav>
 </aside>
 
@@ -519,8 +546,26 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
 
     <!-- COMPRAS -->
     <section class="section" id="section-compras">
+      <div class="alert alert-info">
+        <span>💡</span><span><strong>A compra é lançada uma vez só, aqui.</strong> Cada nota entra no estoque/CMV pela data de recebimento e vai sozinha para <strong>Caixa e Compras</strong> com o nº da nota e as parcelas.
+        Para planejar os pagamentos, clique em <strong>Parcelas</strong> e ajuste datas e valores.</span>
+      </div>
+      <div class="stats-grid" id="np-cards"></div>
       <div class="panel">
-        <div class="panel-hdr"><span class="panel-ttl">Registro de Compras</span><button class="btn btn-primary" onclick="openNotaModal()">+ Registrar Nota de Compra</button></div>
+        <div class="panel-hdr"><span class="panel-ttl">🧾 Notas e Pagamentos</span>
+          <div class="filter-bar" style="margin:0" id="np-filters">
+            <button class="fpill active" onclick="setNotaFilter('',this)">Todas</button>
+            <button class="fpill" onclick="setNotaFilter('aberto',this)">Com parcela em aberto</button>
+            <button class="fpill" onclick="setNotaFilter('acao',this)">Precisam de ajuste</button>
+          </div>
+        </div>
+        <div class="tbl-wrap">
+          <table><thead><tr><th>Recebido em</th><th>Fornecedor / Nota</th><th style="text-align:right">Total da Nota</th><th>Pagamento</th><th>Parcelas (vencimento)</th><th style="text-align:right">Em Aberto</th><th></th></tr></thead>
+          <tbody id="np-tbody"></tbody></table>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-hdr"><span class="panel-ttl">Itens das Notas</span><button class="btn btn-primary" onclick="openNotaModal()">+ Registrar Nota de Compra</button></div>
         <div class="alert alert-info" style="margin:14px 18px 0">
           <span>💡</span><span>A data da compra é a <strong>data de recebimento</strong> (quando o material chegou na prateleira). O <strong>Total</strong> inclui o frete rateado da nota — é ele que entra no CMV.</span>
         </div>
@@ -613,6 +658,9 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
 
     <!-- CAIXA E COMPRAS — PARCELAMENTOS -->
     <section class="section" id="section-parcelamentos">
+      <div class="alert alert-info"><span>💳</span><span>Esta tela só <strong>mostra</strong> o caixa: as notas lançadas em <strong>Compras</strong> aparecem aqui sozinhas, com nº da nota e parcelas. Não lance a mesma compra de novo aqui.
+        Datas e valores das parcelas podem ser ajustados aqui ou em Compras → Parcelas.</span></div>
+      <div id="cc-orphans"></div>
       <div class="stats-grid">
         <div class="stat-card c-warn" id="cc-card-total">
           <div class="lbl">Total Comprometido</div>
@@ -641,7 +689,6 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
           <span class="panel-ttl">📆 Cronograma de Desembolso</span>
           <div style="display:flex;gap:8px;align-items:center">
             <select id="cc-year" onchange="renderCommitments()" style="width:auto;padding:6px 10px"></select>
-            <button class="btn btn-primary" onclick="openCommitmentModal()">+ Nova Compra Parcelada</button>
           </div>
         </div>
         <div class="tbl-wrap">
@@ -666,11 +713,11 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
       </div>
 
       <div class="panel">
-        <div class="panel-hdr"><span class="panel-ttl">Compras Parceladas Cadastradas (<span id="cc-count">0</span>)</span></div>
+        <div class="panel-hdr"><span class="panel-ttl">Compras no Caixa (<span id="cc-count">0</span>)</span></div>
         <div class="tbl-wrap">
           <table>
             <thead><tr>
-              <th>Fornecedor / Descrição</th><th>Data da Compra</th>
+              <th>Fornecedor / Nota</th><th>Data da Compra</th>
               <th style="text-align:right">Valor Total</th><th style="text-align:center">Parcelas</th>
               <th style="text-align:right">Saldo Devedor</th><th>Progresso</th><th title="Compara até quando o material da nota dura com a data da última parcela">Material dura até × Última parcela</th><th></th>
             </tr></thead>
@@ -684,7 +731,8 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
     <section class="section" id="section-reposicao">
       <div class="alert alert-info">
         <span>🔄</span><span>Calculado a partir das contagens e compras — <strong>não precisa lançar saídas</strong>. O consumo de cada semana sai dos lotes que vencem primeiro (PVPS).
-        <strong>Pedir até</strong> = data prevista em que o item acaba − prazo de entrega. A sugestão cobre o estoque mínimo + 4 semanas de consumo.</span>
+        <strong>Pedir até</strong> = data prevista em que o item chega ao <strong>estoque mínimo do produto</strong> − prazo de entrega (com mínimo 0, a data em que zera). Produto sem mínimo cadastrado não gera alerta de mínimo.
+        A sugestão repõe o mínimo + o consumo do prazo de entrega + 4 semanas. A validade é avisada no prazo de cada produto.</span>
       </div>
       <div class="stats-grid">
         <div class="stat-card" id="rp-card-pedir"><div class="lbl">Pedir Esta Semana</div><div class="val" id="rp-stat-pedir">0</div><div class="sub" id="rp-stat-pedir-sub">—</div></div>
@@ -695,7 +743,7 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
       <div class="panel">
         <div class="panel-hdr"><span class="panel-ttl">📆 Próximas 8 Semanas — Parcelas × Reposição × Vencimentos</span></div>
         <div class="tbl-wrap">
-          <table><thead><tr><th>Semana</th><th style="text-align:right">Parcelas a Pagar</th><th style="text-align:right">Reposição Sugerida</th><th>Itens a Pedir</th><th style="text-align:right">R$ Vencendo sem Uso</th><th style="text-align:right">Saldo do Plano</th><th>Situação</th></tr></thead>
+          <table><thead><tr><th>Semana</th><th style="text-align:right">Parcelas a Pagar</th><th style="text-align:right">Reposição Sugerida</th><th>Itens a Pedir</th><th style="text-align:right">R$ Vencendo sem Uso</th><th style="text-align:right" id="rp-wk-c6">Saldo do Plano</th><th id="rp-wk-c7">Situação</th></tr></thead>
           <tbody id="rp-weeks-tbody"></tbody></table>
         </div>
       </div>
@@ -713,11 +761,13 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
         </div>
       </div>
       <div class="panel" id="rp-margin-panel">
-        <div class="panel-hdr"><span class="panel-ttl">💰 Margem Potencial do Estoque Atual (estimativa)</span></div>
+        <div class="panel-hdr"><span class="panel-ttl">💰 Margem Potencial dos Insumos (estimativa por mês)</span></div>
         <div class="panel-body">
-          <div class="alert alert-warn"><span>⚠️</span><span><strong>Estimativa sobre o estoque de hoje, não é lucro realizado.</strong> Conta: estoque esperado × exames que cada unidade rende × preço cobrado (cadastrados em Produtos). Considera só o custo do insumo, sem mão de obra, outros materiais, repetições nem perdas. Só entram itens com custo, preço e rendimento preenchidos; nenhum insumo é ligado a exame automaticamente.</span></div>
+          <div class="alert alert-warn"><span>⚠️</span><span><strong>Estimativa, não é lucro realizado.</strong> A leitura principal é <strong>por mês, pelo consumo</strong> das contagens: um reagente comprado para 6 meses não joga todo o custo (nem toda a receita) num mês só.
+            Insumo <strong>exclusivo</strong> (um exame) recebe a receita: consumo × exames por unidade × preço. Insumo <strong>compartilhado</strong> (tubo, luva, reagente de vários exames) não recebe receita; o custo dele por mês é descontado da margem total.
+            Considera só insumos, sem mão de obra, repetições nem perdas. Marque o tipo de uso e as siglas do Workvet em Produtos.</span></div>
           <div class="stats-grid" id="mg-cards"></div>
-          <div class="tbl-wrap"><table><thead><tr><th>Produto</th><th style="text-align:right">Estoque</th><th style="text-align:right">Custo</th><th style="text-align:right">Exames possíveis</th><th style="text-align:right">Preço/exame</th><th style="text-align:right">Receita potencial</th><th style="text-align:right">Margem</th><th style="text-align:right">Margem %</th></tr></thead>
+          <div class="tbl-wrap"><table><thead id="mg-thead"></thead>
           <tbody id="mg-tbody"></tbody></table></div>
         </div>
       </div>
@@ -725,7 +775,7 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
 
     <!-- EXAMES REALIZADOS -->
     <section class="section" id="section-exames">
-      <div class="alert alert-info"><span>🧪</span><span>Importe a planilha de exames realizados do sistema do laboratório. <strong>O sistema não presume o formato</strong>: você escolhe as colunas e confere a prévia antes de salvar. Os dados servem para acompanhar volume e sazonalidade; as sugestões de compra <strong>ainda não usam</strong> esses números.</span></div>
+      <div class="alert alert-info"><span>🧪</span><span>Importe a planilha de exames (a "Controle Mensal de Exames" com as abas <strong>Dados &lt;mês&gt;</strong> coladas do Workvet). Cada linha é uma ficha e cada sigla da coluna Exames conta 1 exame. Você confere a prévia antes de salvar. Os dados servem para acompanhar volume e sazonalidade; as sugestões de compra <strong>ainda não usam</strong> esses números.</span></div>
       <div class="panel">
         <div class="panel-hdr"><span class="panel-ttl">📥 Importar exames realizados</span></div>
         <div class="panel-body">
@@ -736,15 +786,18 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
           <div id="ex-map" style="display:none">
             <div class="fr">
               <div class="fg"><label>Linha do cabeçalho</label><input type="number" id="ex-hdr" value="1" min="1" onchange="exRebuild()"></div>
-              <div class="fg"><label>Cada linha do arquivo representa</label><select id="ex-gran" onchange="exPreview()"><option value="dia">Um dia</option><option value="semana">Uma semana (data = início)</option><option value="mes">Um mês</option><option value="intervalo">Um intervalo (início e fim)</option></select></div>
+              <div class="fg"><label>Cada linha do arquivo representa</label><select id="ex-gran" onchange="exPreview()"><option value="ficha">Uma ficha do Workvet (siglas separadas por vírgula)</option><option value="dia">Um dia</option><option value="semana">Uma semana (data = início)</option><option value="mes">Um mês</option><option value="intervalo">Um intervalo (início e fim)</option></select></div>
             </div>
+            <div id="ex-detect" class="alert alert-ok" style="display:none"><span>✅</span><span></span></div>
+            <div class="fg" id="ex-multi-grp" style="display:none;align-items:center;gap:8px"><input type="checkbox" id="ex-multi" style="width:auto" checked onchange="exPreview()"><label for="ex-multi" id="ex-multi-lbl" style="margin:0;text-transform:none;font-size:13px;color:var(--text)"></label></div>
+            <div class="fg" id="ex-cat-grp" style="display:none;align-items:center;gap:8px"><input type="checkbox" id="ex-cat" style="width:auto" checked onchange="exPreview()"><label for="ex-cat" id="ex-cat-lbl" style="margin:0;text-transform:none;font-size:13px;color:var(--text)"></label></div>
             <div class="fr">
               <div class="fg"><label>Coluna da data *</label><select id="ex-c-date" onchange="exPreview()"></select></div>
               <div class="fg" id="ex-c-dateEnd-grp" style="display:none"><label>Coluna da data final *</label><select id="ex-c-dateEnd" onchange="exPreview()"></select></div>
             </div>
             <div class="fr">
-              <div class="fg"><label>Coluna do exame (opcional)</label><select id="ex-c-exam" onchange="exPreview()"></select><div class="conv-hint">Sem ela, tudo entra como "(total)"</div></div>
-              <div class="fg"><label>Coluna da quantidade *</label><select id="ex-c-qty" onchange="exPreview()"></select></div>
+              <div class="fg"><label id="ex-c-exam-lbl">Coluna do exame (opcional)</label><select id="ex-c-exam" onchange="exPreview()"></select><div class="conv-hint" id="ex-c-exam-hint">Sem ela, tudo entra como "(total)"</div></div>
+              <div class="fg" id="ex-c-qty-grp"><label>Coluna da quantidade *</label><select id="ex-c-qty" onchange="exPreview()"></select></div>
             </div>
             <div class="fg" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="ex-replace" style="width:auto" checked><label for="ex-replace" style="margin:0;text-transform:none;font-size:13px;color:var(--text)">Substituir o que já foi importado no mesmo intervalo de datas (evita duplicar)</label></div>
             <div class="fg" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="ex-ignore" style="width:auto" onchange="exPreview()"><label for="ex-ignore" style="margin:0;text-transform:none;font-size:13px;color:var(--text)">Ignorar linhas com erro e importar só as válidas</label></div>
@@ -772,6 +825,8 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
         <div class="panel-hdr">
           <span class="panel-ttl">💰 Faturamento e CMV % Mensal</span>
           <div style="display:flex;gap:10px;align-items:center">
+            <label style="margin:0;white-space:nowrap" title="Os dados anteriores continuam no sistema, só ficam fora dos totais e médias">Analisar a partir de</label>
+            <input type="date" id="cmv-start" style="width:150px;padding:6px 8px" onchange="saveCMVStart()">
             <label style="margin:0;white-space:nowrap">Meta CMV %</label>
             <input type="number" id="cmv-goal" step="0.1" min="0" style="width:80px;padding:6px 8px" onchange="saveCMVGoal()" placeholder="Ex: 12">
             <select id="rev-year" onchange="renderMonthlyRevenue()" style="width:auto;padding:6px 10px"></select>
@@ -779,7 +834,8 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
         </div>
         <div class="alert alert-info" style="margin:14px 18px 0">
           <span>💡</span><span>Lance o <strong>faturamento bruto</strong> do mês (valor faturado) e quanto dele é de <strong>exames terceirizados</strong>.
-          O CMV do mês soma os períodos que <strong>terminam</strong> no mês. Valores salvam ao sair do campo.</span>
+          O CMV do mês soma os períodos que <strong>terminam</strong> no mês. Valores salvam ao sair do campo.
+          Meses antes da data de início da análise aparecem apagados e <strong>não entram nos totais</strong> (os registros antigos não foram alterados).</span>
         </div>
         <div class="tbl-wrap">
           <table><thead><tr><th>Mês</th><th style="text-align:right">Faturamento Bruto</th><th style="text-align:right">Terceirizados</th><th style="text-align:center">Períodos</th><th style="text-align:right">CMV</th><th style="text-align:right">Perdas</th><th style="text-align:right">CMV %</th><th style="text-align:right">CMV % s/ internos</th></tr></thead>
@@ -787,7 +843,7 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
         </div>
       </div>
       <div class="panel">
-        <div class="panel-hdr"><span class="panel-ttl">Histórico de CMV por Período</span></div>
+        <div class="panel-hdr"><span class="panel-ttl">Histórico de CMV por Período</span><label class="ex-per" style="margin:0;font-size:12px;text-transform:none;color:var(--muted)"><input type="checkbox" id="cmv-show-old" onchange="renderCMVHistory()"> Mostrar períodos antes do início da análise</label></div>
         <div class="tbl-wrap">
           <table><thead><tr><th>Período</th><th>Tipo</th><th>Est. Inicial</th><th>Compras</th><th>Est. Final</th><th>CMV</th><th>Perdas</th><th>Faturamento</th><th>CMV %</th><th>Média 4 Períodos</th></tr></thead>
           <tbody id="cmv-hist"></tbody></table>
@@ -851,17 +907,57 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
       </div>
     </section>
 
+
+    <!-- GUIA DE USO -->
+    <section class="section" id="section-guia">
+      <div class="panel"><div class="panel-hdr"><span class="panel-ttl">📋 Rotina semanal de contagem</span></div><div class="panel-body">
+        <div class="gd-flow">
+          <div class="gd-step"><div class="n">1</div><div class="t">Criar a semana</div><div class="d">Períodos → + Novo Período. As datas já vêm sugeridas (dia seguinte ao fim da semana anterior).</div></div>
+          <div class="gd-arrow">→</div>
+          <div class="gd-step"><div class="n">2</div><div class="t">Abertura automática</div><div class="d">A abertura da semana é a <strong>última contagem</strong> (fechamento da semana anterior). Não precisa contar de novo.</div></div>
+          <div class="gd-arrow">→</div>
+          <div class="gd-step"><div class="n">3</div><div class="t">Contar no fim da semana</div><div class="d">Contagem → + Nova Contagem → tipo Fechamento. Pode ser segunda, terça ou outro dia: o sistema ajusta o fim da semana.</div></div>
+          <div class="gd-arrow">→</div>
+          <div class="gd-step"><div class="n">4</div><div class="t">Fechar o período</div><div class="d">Períodos → Fechar. Essa contagem vira a abertura da próxima semana.</div></div>
+        </div>
+        <div class="conv-hint" style="margin-top:8px">Fechado = embalagens fechadas (unidade de compra). Aberto/solto = o que sobra da embalagem em uso (unidade de estoque). Aceita decimais.</div>
+      </div></div>
+      <div class="panel"><div class="panel-hdr"><span class="panel-ttl">🛒 Compra e pagamento (um lançamento só)</span></div><div class="panel-body">
+        <div class="gd-flow">
+          <div class="gd-step"><div class="n">1</div><div class="t">Registrar a nota</div><div class="d">Compras → + Registrar Nota. Data = dia em que o material chegou. Informe validade e lote dos itens que têm validade.</div></div>
+          <div class="gd-arrow">→</div>
+          <div class="gd-step"><div class="n">2</div><div class="t">Forma de pagamento</div><div class="d">À vista, parcelado (com as datas) ou a definir (boleto ainda não saiu, entra com data estimada).</div></div>
+          <div class="gd-arrow">→</div>
+          <div class="gd-step"><div class="n">3</div><div class="t">Caixa automático</div><div class="d">A nota aparece em Caixa e Compras com o nº da nota e as parcelas. <strong>Não lance de novo lá.</strong></div></div>
+          <div class="gd-arrow">→</div>
+          <div class="gd-step"><div class="n">4</div><div class="t">Planejar e pagar</div><div class="d">Compras → Notas e Pagamentos → Parcelas: ajuste datas e valores e marque como pago.</div></div>
+        </div>
+      </div></div>
+      <div class="g2">
+        <div class="panel"><div class="panel-hdr"><span class="panel-ttl">📅 Todo mês</span></div><div class="panel-body">
+          <div class="gd-rule"><span>💰</span><span><strong>Faturamento:</strong> CMV → Faturamento e CMV % Mensal. Lance o bruto do mês e quanto é de terceirizados.</span></div>
+          <div class="gd-rule"><span>🧪</span><span><strong>Exames:</strong> cole o relatório do Workvet na aba "Dados &lt;mês&gt;" da planilha e importe em Exames Realizados (com "substituir o mesmo intervalo" marcado, não duplica).</span></div>
+          <div class="gd-rule"><span>🗑️</span><span><strong>Perdas:</strong> o que venceu ou quebrou vai em Perdas e Baixas.</span></div>
+        </div></div>
+        <div class="panel"><div class="panel-hdr"><span class="panel-ttl">⚙️ Regras que valem para todos</span></div><div class="panel-body">
+          <div class="gd-rule"><span>🔄</span><span><strong>Estoque mínimo</strong> é de cada produto. 0 = avisa quando zerar. Vazio = sem aviso de mínimo.</span></div>
+          <div class="gd-rule"><span>⏳</span><span><strong>Validade</strong> é avisada no prazo de cada produto (campo "avisar vencimento com quantos dias"). Item sem validade: desmarque "controla validade".</span></div>
+          <div class="gd-rule"><span>📈</span><span><strong>CMV</strong> é analisado a partir da data escolhida em CMV (padrão: 01/11/2026). As contagens antigas continuam no sistema, sem alteração.</span></div>
+        </div></div>
+      </div>
+    </section>
+
     <!-- ALERTAS -->
     <section class="section" id="section-alertas">
       <div class="panel">
-        <div class="panel-hdr"><span class="panel-ttl">🔔 Itens Abaixo do Estoque Mínimo</span></div>
+        <div class="panel-hdr"><span class="panel-ttl">🔔 Itens no Estoque Mínimo ou Abaixo (estoque esperado; mínimo 0 = alerta ao zerar)</span></div>
         <div class="tbl-wrap">
           <table><thead><tr><th>Produto</th><th>Categoria</th><th>Qtd Atual</th><th>Mínimo</th><th>Déficit</th><th>Custo Reposição Est.</th><th>Fornecedor</th><th>Telefone</th></tr></thead>
           <tbody id="alert-tbody"></tbody></table>
         </div>
       </div>
       <div class="panel">
-        <div class="panel-hdr"><span class="panel-ttl">⏳ Validade — Vencidos e Vencendo em até 60 Dias</span><button class="btn btn-sm btn-outline" onclick="go('reposicao')">Ver reposição</button></div>
+        <div class="panel-hdr"><span class="panel-ttl">⏳ Validade — Vencidos, em Risco e no Prazo de Aviso de Cada Produto</span><button class="btn btn-sm btn-outline" onclick="go('reposicao')">Ver reposição</button></div>
         <div class="tbl-wrap">
           <table><thead><tr><th>Produto</th><th>Lote / Origem</th><th>Validade</th><th style="text-align:right">Saldo do Lote</th><th style="text-align:right">Deve Sobrar no Vencimento</th><th style="text-align:right">Valor em Risco</th><th>Situação</th></tr></thead>
           <tbody id="exp-tbody"></tbody></table>
@@ -1089,18 +1185,27 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
 
       <div class="divider"></div>
       <div class="fr">
-        <div class="fg"><label>Est. Mínimo (em Unid. de Estoque)</label><input type="number" id="prod-m-min" value="1" min="0" step="any"></div>
+        <div class="fg"><label>Est. Mínimo (em Unid. de Estoque)</label><input type="number" id="prod-m-min" value="1" min="0" step="any" placeholder="vazio = sem mínimo"><div class="conv-hint">0 = alerta quando zerar. Vazio = sem alerta de mínimo.</div></div>
         <div class="fg"><label>Prazo de Entrega (dias)</label><input type="number" id="prod-m-lead" value="7" min="0" step="1"><div class="conv-hint">Usado no "pedir até" da reposição</div></div>
       </div>
       <div class="divider"></div>
       <div class="conv-hint" style="margin-bottom:6px"><strong>Margem potencial (opcional).</strong> Só preencha se este insumo é usado em um exame com preço definido. O sistema não liga insumo a exame sozinho.</div>
-      <div class="fr">
+      <div class="fg" style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <input type="checkbox" id="prod-m-shared" style="width:auto" onchange="onProdShared()">
+        <label for="prod-m-shared" style="margin:0;text-transform:none;font-size:13px;color:var(--text)">Insumo compartilhado: usado em vários exames ou material de apoio (tubo, luva, reagente de vários testes)</label>
+      </div>
+      <div class="fr" id="prod-price-grp">
         <div class="fg"><label>Preço cobrado por exame (R$)</label><input type="number" id="prod-m-price" min="0" step="0.01" placeholder="vazio = não calcular"></div>
         <div class="fg"><label>Exames que rende 1 unidade de estoque</label><input type="number" id="prod-m-epu" min="0" step="any" placeholder="Ex: 1 se a unidade já é 1 exame"><div class="conv-hint">Ex: unidade "Teste" = 1. Caixa com 50 exames = 50.</div></div>
       </div>
-      <div class="fg" style="display:flex;align-items:center;gap:8px">
-        <input type="checkbox" id="prod-m-exp" style="width:auto">
-        <label for="prod-m-exp" style="margin:0;text-transform:none;font-size:13px;color:var(--text)">Controla validade (exige data de validade ao registrar compra)</label>
+      <div class="conv-hint" id="prod-shared-hint" style="display:none;margin-bottom:10px">Compartilhado não recebe receita própria: o custo dele entra na margem como <strong>custo de apoio</strong>, pelo consumo do mês.</div>
+      <div class="fg"><label>Siglas do Workvet que usam este insumo (opcional)</label><input type="text" id="prod-m-codes" placeholder="Ex: HEMO, FHEMO" oninput="onProdCodes()"><div class="conv-hint" id="prod-codes-hint">Liga o insumo aos exames importados: compara o consumo com os exames realmente feitos.</div></div>
+      <div class="fr">
+        <div class="fg" style="display:flex;align-items:center;gap:8px;margin-top:18px">
+          <input type="checkbox" id="prod-m-exp" style="width:auto" onchange="onProdShared()">
+          <label for="prod-m-exp" style="margin:0;text-transform:none;font-size:13px;color:var(--text)">Controla validade (exige data na compra). Desmarque para item sem validade.</label>
+        </div>
+        <div class="fg" id="prod-expdays-grp"><label>Avisar vencimento com quantos dias</label><input type="number" id="prod-m-expdays" min="0" step="1" placeholder="vazio = automático"><div class="conv-hint">Automático: 20% da vida útil do lote, entre prazo de entrega + 14 e 120 dias</div></div>
       </div>
       <div class="fg"><label>Fornecedores (Ctrl+clique = múltiplos)</label><select id="prod-m-supps" multiple></select></div>
     </div>
@@ -1238,20 +1343,54 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
       <div class="fg" style="max-width:420px"><label>Forma de pagamento *</label>
         <select id="nt-pay" onchange="toggleNotaParc()">
           <option value="">Selecione...</option>
-          <option value="vista">À vista (sem parcelas)</option>
-          <option value="parc">Parcelado (já tenho as condições ou o boleto)</option>
+          <option value="vista">À vista (pago de uma vez)</option>
+          <option value="parc">Parcelado / boleto (já tenho as datas)</option>
           <option value="tbd">A definir (o boleto ainda não saiu)</option>
         </select>
       </div>
-      <div class="alert alert-info" id="nt-tbd-note" style="display:none;margin-bottom:12px"><span>💡</span><span>O material entra no estoque e no CMV <strong>hoje</strong>, com a data de recebimento. Quando o boleto sair, crie a compra em <strong>Caixa e Compras</strong> e clique em <strong>🔗 Notas</strong> para ligar esta nota às parcelas.</span></div>
+      <div class="fr" id="nt-vista-grp" style="display:none;max-width:420px">
+        <div class="fg"><label>Data do pagamento</label><input type="date" id="nt-paydate"><div class="conv-hint">Entra no caixa já como pago nessa data</div></div>
+      </div>
+      <div class="alert alert-info" id="nt-tbd-note" style="display:none;margin-bottom:12px"><span>💡</span><span>O material entra no estoque e no CMV com a data de recebimento. No caixa entra <strong>uma parcela com data estimada</strong> (o 1º vencimento abaixo) marcada como "a definir". Quando o boleto sair, ajuste em <strong>Compras → Parcelas</strong>. Não precisa lançar de novo em Caixa e Compras.</span></div>
       <div class="fr3" id="nt-parc-grp" style="display:none">
-        <div class="fg"><label>Nº de Parcelas</label><input type="number" id="nt-n" min="1" step="1" value="2" oninput="calcNota()"></div>
-        <div class="fg"><label>1º Vencimento</label><input type="date" id="nt-first" onchange="calcNota()"></div>
-        <div class="fg"><label>Intervalo</label><select id="nt-interval" onchange="calcNota()"><option value="month">Mensal</option><option value="15">Quinzenal</option><option value="7">Semanal</option></select></div>
+        <div class="fg" id="nt-n-grp"><label>Nº de Parcelas</label><input type="number" id="nt-n" min="1" step="1" value="2" oninput="buildNotaInstallments()"></div>
+        <div class="fg"><label id="nt-first-lbl">1º Vencimento</label><input type="date" id="nt-first" onchange="buildNotaInstallments()"></div>
+        <div class="fg" id="nt-int-grp"><label>Intervalo</label><select id="nt-interval" onchange="buildNotaInstallments()"><option value="month">Mensal</option><option value="15">Quinzenal</option><option value="7">Semanal</option><option value="28">28 dias</option><option value="30">30 dias</option></select></div>
+      </div>
+      <div id="nt-inst-box" style="display:none">
+        <div class="conv-hint" style="margin-bottom:6px">Confira as parcelas antes de salvar. Datas e valores podem ser ajustados aqui ou depois, em Compras → Parcelas.</div>
+        <div class="cc-prev-scroll"><table><thead><tr><th style="width:60px">Nº</th><th>Vencimento</th><th style="text-align:right">Valor (R$)</th></tr></thead><tbody id="nt-inst-tbody"></tbody></table></div>
+        <div class="cc-total-chk"><span class="text-muted">Soma das parcelas:</span><strong class="mono" id="nt-inst-sum">R$ 0,00</strong><span id="nt-inst-flag"></span></div>
       </div>
       <div class="conv-hint" id="nt-parc-preview"></div>
     </div>
     <div class="modal-foot"><button class="btn btn-outline" onclick="closeM('m-nota')">Cancelar</button><button class="btn btn-primary" onclick="saveNota()">Registrar Nota</button></div>
+  </div>
+</div>
+
+<!-- PARCELAS DE UMA NOTA (visualizar e ajustar datas para planejar pagamentos) -->
+<div class="mo" id="m-pay">
+  <div class="modal" style="max-width:720px">
+    <div class="modal-hdr"><div><h3>Pagamento da nota</h3><div class="msub" id="pay-sub"></div></div><button class="modal-x" onclick="closeM('m-pay')">×</button></div>
+    <div class="modal-body">
+      <div class="fr">
+        <div class="fg"><label>Forma de pagamento</label>
+          <select id="pay-terms" onchange="onPayTerms()"><option value="vista">À vista</option><option value="parc">Parcelado / boleto</option><option value="tbd">A definir (boleto ainda não saiu)</option></select></div>
+        <div class="fg"><label>Nº da Nota</label><input type="text" id="pay-invoice" placeholder="Opcional"><div class="conv-hint">Aparece no caixa junto com o fornecedor</div></div>
+      </div>
+      <div class="uom-section-label">Refazer as parcelas (opcional)</div>
+      <div class="fr3" style="align-items:end">
+        <div class="fg"><label>Nº de Parcelas</label><input type="number" id="pay-n" min="1" step="1" value="1"></div>
+        <div class="fg"><label>1º Vencimento</label><input type="date" id="pay-first"></div>
+        <div class="fg"><label>Intervalo</label><select id="pay-interval"><option value="month">Mensal</option><option value="15">Quinzenal</option><option value="7">Semanal</option><option value="28">28 dias</option><option value="30">30 dias</option></select></div>
+      </div>
+      <button class="btn btn-sm btn-outline" onclick="regenPayInstallments()" style="margin-bottom:12px">↻ Gerar parcelas com esses dados</button>
+      <div class="cc-prev-scroll"><table><thead><tr><th style="width:60px">Nº</th><th>Vencimento</th><th style="text-align:right">Valor (R$)</th><th style="text-align:center;width:70px">Pago</th><th style="width:40px"></th></tr></thead><tbody id="pay-tbody"></tbody></table></div>
+      <button class="btn btn-sm btn-outline" style="margin-top:8px" onclick="addPayRow()">+ Parcela</button>
+      <div class="cc-total-chk"><span class="text-muted">Soma das parcelas:</span><strong class="mono" id="pay-sum">R$ 0,00</strong><span class="text-muted" style="margin-left:10px">Total da nota:</span><strong class="mono" id="pay-total">R$ 0,00</strong><span id="pay-flag"></span></div>
+      <div class="conv-hint" style="margin-top:6px">A soma pode ser diferente do total da nota quando há juros, desconto ou boleto que junta mais de uma nota. O caixa usa a soma das parcelas.</div>
+    </div>
+    <div class="modal-foot"><button class="btn btn-outline" onclick="closeM('m-pay')">Cancelar</button><button class="btn btn-primary" onclick="savePay()">Salvar pagamento</button></div>
   </div>
 </div>
 
@@ -1486,10 +1625,18 @@ function calcCMVDetail(periodId){
 }
 function calcCMV(periodId){ const d=calcCMVDetail(periodId); return d?d.cmv:null; }
 // Série de períodos (sem implantação) em ordem cronológica, com média móvel de 4 períodos
+// Análise de CMV a partir de uma data (padrão: novembro/2026, quando os registros ficaram consistentes).
+// Os dados anteriores NÃO são apagados nem alterados: só ficam fora dos totais, médias e do Dashboard.
+const CMV_INICIO_PADRAO = '2026-11-01';
+function cmvStart(){ const v=S.settings&&S.settings.cmv_start; return (v && /^\d{4}-\d{2}-\d{2}$/.test(v))? v : CMV_INICIO_PADRAO; }
+function inCmvScope(p){ const r=periodRef(p); return !!r && r>=cmvStart(); }
+function monthInCmvScope(ym){ return ym>=cmvStart().slice(0,7); }
 function cmvSeries(){
   const list=S.periods.filter(p=>p.type!=='implantacao').sort((a,b)=>periodRef(a).localeCompare(periodRef(b))||a.id-b.id).map(p=>calcCMVDetail(p.id));
-  list.forEach((d,i)=>{
-    const win=list.slice(Math.max(0,i-3),i+1);
+  list.forEach(d=>{ d.inScope=inCmvScope(d.p); d.rolling4=null; });
+  const sc=list.filter(d=>d.inScope);   // média móvel só com períodos dentro da análise
+  sc.forEach((d,i)=>{
+    const win=sc.slice(Math.max(0,i-3),i+1);
     d.rolling4 = (win.length===4 && win.every(x=>x.completo && x.revenue>0))
       ? win.reduce((s,x)=>s+x.cmv,0)/win.reduce((s,x)=>s+x.revenue,0) : null;
   });
@@ -1509,7 +1656,7 @@ function monthSummary(ym){
   if(mr && Number(mr.revenue)>0){ rev=Number(mr.revenue); outs=Number(mr.outsourced)||0; fonte='mensal'; }
   else if(comp.length && comp.every(d=>d.revenue>0)){ rev=comp.reduce((s,d)=>s+d.revenue,0); outs=comp.reduce((s,d)=>s+d.outsourced,0); fonte='semanal'; }
   const overlap=periods.some(p=>p.type==='mensal') && periods.some(p=>p.type==='semanal');
-  return {ym, nPeriods:periods.length, nCompletos:comp.length, nPendentes:periods.length-comp.length,
+  return {ym, inScope:monthInCmvScope(ym), nPeriods:periods.length, nCompletos:comp.length, nPendentes:periods.length-comp.length,
     cmv, perdas, consumo:cmv!==null?cmv-perdas:null, rev, outs, fonte, overlap, mr,
     pct:(cmv!==null && rev>0)?cmv/rev:null, pctInt:(cmv!==null && rev!==null && rev-outs>0)?cmv/(rev-outs):null};
 }
@@ -1605,20 +1752,40 @@ function projectLots(res, daily){
   if(daily>EPS) res.ruptura=addDays(ref,Math.floor(t+1e-9));
   return res;
 }
+// Estoque mínimo do produto: null = não cadastrado (sem alerta de mínimo); 0 é um mínimo válido
+// (alerta quando o item zera e o pedido é calculado para chegar antes de zerar).
+function minOf(p){ return (p.min===null||p.min===undefined||p.min==='')?null:Number(p.min); }
 function replenishmentRow(p){
   const res=buildLots(p);
   const daily=consumptionRate(res.intervals);
   projectLots(res,daily);
-  const lead=Number(p.leadTime)||LEAD_TIME_PADRAO;
+  const lead=(p.leadTime===null||p.leadTime===undefined||isNaN(p.leadTime))?LEAD_TIME_PADRAO:Number(p.leadTime);
   const conv=p.convFactor||1;
-  const minQ=Number(p.min)||0;
+  const minSet=minOf(p)!==null;
+  const minQ=minSet?minOf(p):0;
   const t=today();
-  const pedirAte=res.ruptura?addDays(res.ruptura,-lead):null;
-  const sugStock=(daily && daily>EPS)? minQ+daily*COBERTURA_ALVO_DIAS : null;
-  const sugUnits=sugStock!==null? Math.max(1,Math.ceil(sugStock/conv-1e-9)) : null;
-  const sugCost=sugUnits!==null? sugUnits*(Number(p.purchaseCost)||0) : null;
   const open=res.lots.filter(l=>l.remaining>EPS);
-  const nearestExpiry=open.filter(l=>l.expiry).map(l=>l.expiry).sort()[0]||null;
+  // Utilizável = o que existe e ainda dá para usar antes de vencer (lote vencido ou que vai vencer parado não conta)
+  const usable=open.reduce((s,l)=>s+Math.max(0,l.remaining-(l.atRisk||0)),0);
+  const ref=res.lastCount||t;
+  // Data em que o estoque utilizável chega ao MÍNIMO cadastrado (com mínimo 0, é a data em que zera).
+  // O "pedir até" é essa data menos o prazo de entrega: o material chega antes de furar o mínimo.
+  let atingeMinimo=null;
+  if(daily && daily>EPS) atingeMinimo=addDays(ref,Math.max(0,Math.floor((usable-minQ)/daily+1e-9)));
+  const pedirAte=atingeMinimo?addDays(atingeMinimo,-lead):null;
+  // Sugestão: no dia do pedido, quanto falta para ter mínimo + consumo do prazo de entrega + 4 semanas
+  let sugStock=null;
+  if(daily && daily>EPS){
+    const diaPedido=(pedirAte && pedirAte>t)?pedirAte:t;
+    const noPedido=Math.max(0,usable-daily*Math.max(0,daysBetween(ref,diaPedido)));
+    sugStock=Math.max(0,minQ+daily*(lead+COBERTURA_ALVO_DIAS)-noPedido);
+  } else if(minSet && usable<=minQ+EPS && minQ>0){
+    sugStock=minQ-usable;   // sem histórico de consumo: repõe só até o mínimo
+  }
+  const sugUnits=(sugStock!==null && sugStock>EPS)? Math.ceil(sugStock/conv-1e-9) : (sugStock!==null?0:null);
+  const sugCost=sugUnits!==null? sugUnits*(Number(p.purchaseCost)||0) : null;
+  const nearestLot=open.filter(l=>l.expiry).sort((a,b)=>a.expiry.localeCompare(b.expiry))[0]||null;
+  const nearestExpiry=nearestLot?nearestLot.expiry:null;
   const riskQty=open.reduce((s,l)=>s+(l.atRisk||0),0);
   // Tempo médio em estoque: lotes que SAÍRAM nas últimas 4 semanas, ponderado pela quantidade
   // (entrada = recebimento da compra; saída = contagem em que o lote acabou)
@@ -1627,16 +1794,38 @@ function replenishmentRow(p){
   const exitedAll=res.lots.filter(l=>l.exitDate);
   const exited=winCut?exitedAll.filter(l=>l.exitDate>winCut && l.exitDate<=res.lastCount):[];
   const avgDays=avgOf(exited), avgDaysAll=avgOf(exitedAll);
+  const abaixo=minSet && usable<=minQ+EPS;
   let status;
   if(!res.lastCount) status='sem-contagem';
   else if(pedirAte && pedirAte<t) status='atrasado';
   else if(pedirAte && pedirAte<addDays(t,7)) status='esta-semana';
-  else if(minQ>0 && res.stock<=minQ) status='abaixo-minimo';
+  else if(abaixo) status='abaixo-minimo';
   else if(!daily) status='sem-historico';
   else status='ok';
-  return {p,res,daily,weekly:daily!==null?daily*7:null,coverage:(daily>EPS)?res.stock/daily:null,
-    ruptura:res.ruptura,pedirAte,lead,sugUnits,sugCost,nearestExpiry,riskQty,riskVal:riskQty*(Number(p.cost)||0),avgDays,avgDaysAll,exitedWin:exited,status};
+  return {p,res,daily,weekly:daily!==null?daily*7:null,coverage:(daily>EPS)?usable/daily:null,usable,minSet,minQ,abaixo,atingeMinimo,
+    ruptura:res.ruptura,pedirAte,lead,sugUnits,sugCost,nearestExpiry,nearestLot,riskQty,riskVal:riskQty*(Number(p.cost)||0),avgDays,avgDaysAll,exitedWin:exited,status};
 }
+// ─── VALIDADE: prazo de aviso POR PRODUTO (não existe prazo único) ──
+// Produto com "avisar N dias antes" cadastrado usa esse número. Sem cadastro, o aviso é proporcional
+// à vida útil do lote (20% do tempo entre a entrada e a validade), nunca menor que o prazo de entrega
+// + 14 dias e nunca maior que 120 dias. Item sem validade não gera aviso.
+function expiryAlertDays(p, lot){
+  if(p && p.expiryAlertDays!==null && p.expiryAlertDays!==undefined && p.expiryAlertDays!=='' && !isNaN(p.expiryAlertDays)) return {days:Number(p.expiryAlertDays), fonte:'produto'};
+  const lead=(p && p.leadTime!==null && p.leadTime!==undefined && !isNaN(p.leadTime))?Number(p.leadTime):LEAD_TIME_PADRAO;
+  const piso=lead+14;
+  const vida=(lot && lot.entry && lot.expiry)?daysBetween(lot.entry,lot.expiry):0;
+  return {days: vida>0? Math.max(piso, Math.min(120, Math.round(vida*0.2))) : piso, fonte:'automático'};
+}
+// 'vencido' | 'risco' (vence antes de ser usado no ritmo atual) | 'atencao' (dentro do aviso do produto) | 'ok' | null
+function expiryStatus(p, lot, t){
+  if(!lot || !lot.expiry) return null;
+  t=t||today();
+  if(lot.expiry<t) return 'vencido';
+  if((lot.atRisk||0)>EPS) return 'risco';
+  return daysBetween(t,lot.expiry)<=expiryAlertDays(p,lot).days ? 'atencao' : 'ok';
+}
+const EXP_BADGE={vencido:'b-danger',risco:'b-danger',atencao:'b-warn',ok:'b-gray'};
+const EXP_LABEL={vencido:'Vencido',risco:'Vence antes de usar',atencao:'Dentro do prazo de aviso',ok:'Validade ok'};
 function buildReplenishment(){
   const rows=S.products.filter(p=>p.active!==false).map(replenishmentRow);
   const byPid={}; rows.forEach(r=>byPid[r.p.id]=r);
@@ -1651,7 +1840,7 @@ function replenishmentWeeks(n, rep){
     const ws=addDays(w0,7*k), we=addDays(ws,6);
     const inW=d=> d && (k===0? d<=we : (d>=ws && d<=we));
     const parc=(S.installments||[]).filter(i=>!i.paid && inW(i.due));
-    const sug=rep.rows.filter(r=>r.pedirAte && r.sugCost!==null && inW(r.pedirAte));
+    const sug=rep.rows.filter(r=>r.pedirAte && r.sugUnits>0 && inW(r.pedirAte));
     const venc=[]; rep.rows.forEach(r=>r.res.lots.forEach(l=>{ if(l.remaining>EPS && l.atRisk>EPS && inW(l.expiry)) venc.push({r,l,val:l.atRisk*(Number(r.p.cost)||0)}); }));
     const pr=planRows.find(w=>w.week===ws)||null;
     const parcTot=parc.reduce((s,i)=>s+i.amount,0), sugTot=sug.reduce((s,r)=>s+r.sugCost,0);
@@ -1675,6 +1864,42 @@ function commitmentHorizon(commitId, rep){
   return {nItens:purch.length, materialAte, desconhecido, ultimaParcela:ultima,
     pagaDepois: !!(materialAte && ultima && ultima>materialAte), diasDepois: (materialAte&&ultima)?daysBetween(materialAte,ultima):null};
 }
+// ─── NOTA ↔ CAIXA ─────────────────────────────────────────────
+// Uma nota de compra = itens lançados em Compras. Ela fica ligada ao caixa por commitment_id.
+// Notas já ligadas a um lançamento do caixa são agrupadas por ele (um boleto pode juntar notas);
+// as demais pelo nº da nota + data de recebimento + fornecedor.
+function commitTerms(c, inst){
+  if(!c) return 'sem-caixa';
+  if(c.terms) return c.terms;
+  if(/a definir/i.test(c.notes||'')) return 'tbd';
+  inst=inst||(S.installments||[]).filter(i=>i.commitId===c.id);
+  if(inst.length===1 && inst[0].paid && inst[0].due===c.date) return 'vista';
+  return 'parc';
+}
+function notaGroups(){
+  const g={};
+  (S.purchases||[]).forEach(x=>{
+    const k=x.commitmentId?('c'+x.commitmentId):(`n|${x.invoice||''}|${x.date}|${x.suppId||''}`);
+    const o=(g[k]=g[k]||{key:k,commitId:x.commitmentId||null,date:x.date,suppIds:new Set(),invoices:new Set(),ids:[],lines:[],total:0});
+    o.ids.push(x.id); o.lines.push(x); o.total+=Number(x.total)||0;
+    if(x.invoice) o.invoices.add(x.invoice); if(x.suppId) o.suppIds.add(x.suppId); if(x.date<o.date) o.date=x.date;
+  });
+  const t=today();
+  return Object.values(g).map(o=>{
+    const c=o.commitId?(S.commits||[]).find(z=>z.id===o.commitId)||null:null;
+    const inst=o.commitId?(S.installments||[]).filter(i=>i.commitId===o.commitId).sort((a,b)=>a.due.localeCompare(b.due)||a.seq-b.seq):[];
+    const sumInst=r2(inst.reduce((s,i)=>s+i.amount,0)), open=inst.filter(i=>!i.paid);
+    const total=r2(o.total);
+    const terms=c?commitTerms(c,inst):(total<=0?'bonificacao':'sem-caixa');
+    return {...o, total, suppId:[...o.suppIds][0]||null, invoice:[...o.invoices].join(', ')||(c&&c.invoice)||'', commit:c, inst, sumInst,
+      openAmt:r2(open.reduce((s,i)=>s+i.amount,0)), nextDue:open.map(i=>i.due).sort()[0]||null, overdue:open.some(i=>i.due<t),
+      terms, diff:c?r2(sumInst-total):null};
+  }).sort((a,b)=>b.date.localeCompare(a.date));
+}
+// Precisa de ajuste: sem lançamento no caixa, boleto a definir, ou soma das parcelas diferente da nota (> R$ 1)
+function notaNeedsAction(n){ return n.terms==='sem-caixa' || n.terms==='tbd' || (n.diff!==null && Math.abs(n.diff)>1); }
+// Lançamentos do caixa sem nenhum item de estoque ligado: provável compra lançada em duplicidade
+function orphanCommitments(){ const used=new Set((S.purchases||[]).map(x=>x.commitmentId).filter(Boolean)); return (S.commits||[]).filter(c=>!used.has(c.id)); }
 // Rateio do frete da nota proporcional ao valor de cada item (resto na última linha).
 // Se todos os itens forem bonificação (valor 0), rateia pela quantidade.
 function allocateFreight(lines, freight){
@@ -1708,26 +1933,56 @@ const JANELA_DIAS = 28;
 // Reaproveita o custo por unidade de estoque do cadastro (p.cost, atualizado pela compra mais
 // recente) e o estoque esperado da reposição. Só calcula quando há custo, preço cobrado e
 // rendimento (exames por unidade de estoque) informados. Nada é inferido.
-function stockMargin(rep){
+// Rateio no tempo: o estoque de hoje pode durar vários meses. Por isso a leitura principal é MENSAL,
+// pelo consumo real (contagens): custo/mês = consumo/mês × custo; receita/mês = exames que esse
+// consumo rende × preço. Comprar 6 meses de reagente não infla a margem de um mês.
+// Rateio entre exames: insumo marcado como COMPARTILHADO (tubo, luva, reagente de vários exames)
+// não recebe receita própria; o custo dele entra como custo de apoio e é descontado da margem total.
+const DIAS_MES = 30.4;
+function stockMargin(rep, examVols){
   rep=rep||buildReplenishment();
   const rows=rep.rows.map(r=>{
     const p=r.p, qty=r.res.stock, cost=Number(p.cost)||0;
     const price=Number(p.salePrice)||0, epu=Number(p.examsPerUnit)||0;
-    const o={p,qty,unit:p.stockUnit,cost,costVal:qty*cost,price,examsPerUnit:epu,exams:null,revenue:null,margin:null,pct:null,status:'ok'};
+    const daily=(r.daily && r.daily>EPS)?r.daily:null;
+    const useMonth=daily?daily*DIAS_MES:null;
+    const o={p,qty,unit:p.stockUnit,cost,costVal:qty*cost,price,examsPerUnit:epu,exams:null,revenue:null,margin:null,pct:null,
+      shared:!!p.sharedUse, useMonth, coverageMonths:useMonth?qty/useMonth:null, costMonth:useMonth?useMonth*cost:null,
+      examsMonth:null, revMonth:null, marginMonth:null, realizedMonth:null, status:'ok'};
     if(!r.res.lastCount) o.status='sem-contagem';
-    else if(qty<=EPS) o.status='sem-estoque';
+    else if(qty<=EPS && !useMonth) o.status='sem-estoque';
     else if(cost<=0) o.status='sem-custo';
+    else if(o.shared) o.status='compartilhado';
     else if(price<=0) o.status='sem-preco';
     else if(epu<=0) o.status='sem-rendimento';
-    else { o.exams=qty*epu; o.revenue=o.exams*price; o.margin=o.revenue-o.costVal; o.pct=o.revenue>0?o.margin/o.revenue:null; }
+    else {
+      o.exams=qty*epu; o.revenue=o.exams*price; o.margin=o.revenue-o.costVal; o.pct=o.revenue>0?o.margin/o.revenue:null;
+      if(useMonth){ o.examsMonth=useMonth*epu; o.revMonth=o.examsMonth*price; o.marginMonth=o.revMonth-o.costMonth; }
+    }
+    // Exames realmente feitos (Workvet) com as siglas ligadas ao insumo: média dos últimos meses completos
+    const codes=examCodesOf(p);
+    if(codes.length && examVols && examVols.length) o.realizedMonth=realizedPerMonth(examVols,codes);
     return o;
   });
-  const ok=rows.filter(x=>x.status==='ok');
-  const sum=(a,f)=>a.reduce((s,x)=>s+f(x),0);
+  const ok=rows.filter(x=>x.status==='ok'), sh=rows.filter(x=>x.status==='compartilhado');
+  const sum=(a,f)=>a.reduce((s,x)=>s+(f(x)||0),0);
   const revenue=sum(ok,x=>x.revenue), costVal=sum(ok,x=>x.costVal), margin=revenue-costVal;
+  const okM=ok.filter(x=>x.revMonth!==null);
+  const revMonth=sum(okM,x=>x.revMonth), costMonthExcl=sum(okM,x=>x.costMonth), costMonthShared=sum(sh,x=>x.costMonth);
+  const marginMonth=revMonth-costMonthExcl-costMonthShared;
   const comEstoque=rows.filter(x=>!['sem-contagem','sem-estoque'].includes(x.status));
   return {rows, tot:{n:ok.length, nComEstoque:comEstoque.length, costVal, revenue, margin, pct:revenue>0?margin/revenue:null,
-    costValSemDados:sum(comEstoque.filter(x=>x.status!=='ok'),x=>x.costVal)}};
+    nShared:sh.length, sharedCostVal:sum(sh,x=>x.costVal),
+    nMonth:okM.length, revMonth, costMonthExcl, costMonthShared, marginMonth, pctMonth:revMonth>0?marginMonth/revMonth:null,
+    costValSemDados:sum(comEstoque.filter(x=>!['ok','compartilhado'].includes(x.status)),x=>x.costVal)}};
+}
+function examCodesOf(p){ return String((p&&p.examCodes)||'').toUpperCase().split(/[,;\s]+/).map(s=>s.trim()).filter(Boolean); }
+// Média mensal de exames das siglas nos últimos 3 meses COMPLETOS com dados (ignora o mês corrente)
+function realizedPerMonth(vols, codes){
+  const set=new Set(codes.map(c=>c.toUpperCase())); const cur=today().slice(0,7); const m={};
+  vols.forEach(v=>{ const ym=String(v.end).slice(0,7); if(ym>=cur) return; m[ym]=m[ym]||0; if(set.has(String(v.exam).toUpperCase())) m[ym]+=Number(v.qty)||0; });
+  const ms=Object.keys(m).sort().slice(-3); if(!ms.length) return null;
+  return ms.reduce((s,k)=>s+m[k],0)/ms.length;
 }
 
 // ─── IMPORTAÇÃO DE EXAMES REALIZADOS (formato do arquivo NÃO é presumido) ──
@@ -1753,6 +2008,116 @@ function parseQty(v){
 }
 // rows: matriz (sem o cabeçalho). map: {date,dateEnd,exam,qty} = índices de coluna (null se não usar).
 // gran: 'dia' | 'semana' | 'mes' | 'intervalo'. firstLine = nº da linha do arquivo da 1ª linha de dados.
+// Divide a célula de exames de uma ficha do Workvet ("HEMO, CREAT, ALT,") em siglas
+function splitSiglas(v){ return String(v===null||v===undefined?'':v).toUpperCase().split(/[,;\/\n]+/).map(s=>s.replace(/\s+/g,'').trim()).filter(Boolean); }
+// gran 'ficha': cada linha é um pedido; a coluna de exames tem as siglas separadas por vírgula e cada sigla
+// conta 1 exame (sigla repetida na mesma ficha conta de novo e é informada). O resultado já sai somado
+// por dia e sigla. catalog (opcional) = {alias:{SIGLA_ALTERNATIVA: SIGLA_PRINCIPAL}} da Tabela de Preços.
+function validateFichaRows(rows, map, firstLine, catalog, label){
+  firstLine=firstLine||2;
+  const res={valid:[],errors:[],blank:0,fatal:null,duplicates:0,first:null,last:null,total:0,exams:new Set(),
+    fichas:0,dupInFicha:0,unknown:{},semExame:0};
+  if(map.date===null||map.date===undefined||map.date==='') { res.fatal='Escolha a coluna da data.'; return res; }
+  if(map.exam===null||map.exam===undefined||map.exam==='') { res.fatal='No formato "ficha", escolha a coluna que lista os exames (siglas).'; return res; }
+  const acc={}; const alias=(catalog&&catalog.alias)||null;
+  rows.forEach((row,i)=>{
+    const line=(label?label+' ':'')+'linha '+(firstLine+i);
+    const d=row[+map.date], ex=row[+map.exam];
+    if((d===null||d===undefined||String(d).trim()==='') && (ex===null||ex===undefined||String(ex).trim()==='')){ res.blank++; return; }
+    const date=parseDateFlex(d);
+    if(!date){ res.errors.push({line,msg:`data inválida: "${d===null?'':d}"`}); return; }
+    const sig=splitSiglas(ex);
+    if(!sig.length){ res.semExame++; return; }
+    res.fichas++;
+    const seen=new Set();
+    sig.forEach(s=>{
+      let code=s;
+      if(alias){ if(alias[s]) code=alias[s]; else res.unknown[s]=(res.unknown[s]||0)+1; }
+      if(seen.has(code)) res.dupInFicha++; seen.add(code);
+      const k=date+'|'+code; acc[k]=(acc[k]||0)+1;
+    });
+    if(!res.first||date<res.first) res.first=date; if(!res.last||date>res.last) res.last=date;
+  });
+  Object.entries(acc).forEach(([k,q])=>{ const [date,exam]=k.split('|'); res.valid.push({start:date,end:date,exam,qty:q}); res.total+=q; res.exams.add(exam); });
+  res.valid.sort((a,b)=>a.start.localeCompare(b.start)||a.exam.localeCompare(b.exam));
+  return res;
+}
+// Junta o resultado de várias abas (ex.: "Dados Janeiro" ... "Dados Outubro")
+function mergeExamResults(list){
+  const out={valid:[],errors:[],blank:0,fatal:null,duplicates:0,first:null,last:null,total:0,exams:new Set(),fichas:0,dupInFicha:0,unknown:{},semExame:0};
+  list.forEach(r=>{
+    if(r.fatal && !out.fatal) out.fatal=r.fatal;
+    out.valid.push(...r.valid); out.errors.push(...r.errors); out.blank+=r.blank; out.duplicates+=r.duplicates||0; out.total+=r.total;
+    r.exams.forEach(e=>out.exams.add(e)); out.fichas+=r.fichas||0; out.dupInFicha+=r.dupInFicha||0; out.semExame+=r.semExame||0;
+    Object.entries(r.unknown||{}).forEach(([k,v])=>out.unknown[k]=(out.unknown[k]||0)+v);
+    if(r.first && (!out.first||r.first<out.first)) out.first=r.first; if(r.last && (!out.last||r.last>out.last)) out.last=r.last;
+  });
+  // mesmo dia e sigla vindo de duas abas: soma (não duplica linha no banco)
+  const m={}; out.valid.forEach(v=>{ const k=v.start+'|'+v.end+'|'+v.exam; if(m[k]){ m[k].qty+=v.qty; out.duplicates++; } else m[k]={...v}; });
+  out.valid=Object.values(m);
+  return out;
+}
+// Lê a "Tabela de Preços" da planilha da equipe: Sigla Workvet, Siglas alternativas, Exame, Grupo,
+// Preço de venda, Preço de custo. Devolve o catálogo e os conflitos encontrados (não corrige nada sozinho).
+function parseExamCatalog(aoa){
+  let h=-1;
+  for(let i=0;i<Math.min(aoa.length,15);i++){ const r=(aoa[i]||[]).map(x=>String(x??'').trim().toLowerCase()); if(r.some(x=>x.startsWith('sigla')) && r.some(x=>x==='exame')){ h=i; break; } }
+  if(h<0) return null;
+  const head=aoa[h].map(x=>String(x??'').trim().toLowerCase());
+  const ci=f=>head.findIndex(f);
+  const cSig=ci(x=>x.startsWith('sigla') && !x.includes('altern')), cAlt=head.map((x,i)=>x.includes('altern')?i:-1).filter(i=>i>=0);
+  const cName=ci(x=>x==='exame'), cGroup=ci(x=>x==='grupo'), cPrice=ci(x=>x.includes('venda')), cCost=ci(x=>x.includes('custo'));
+  const cat={items:{},alias:{},conflicts:[],repeated:[]};
+  for(let i=h+1;i<aoa.length;i++){
+    const r=aoa[i]||[]; const sig=String(r[cSig]??'').toUpperCase().replace(/\s+/g,''); if(!sig) continue;
+    const it={sig,name:String(r[cName]??'').trim()||sig,group:cGroup>=0?String(r[cGroup]??'').trim():'',
+      price:cPrice>=0?parseQty(r[cPrice]):null,cost:cCost>=0?parseQty(r[cCost]):null};
+    if(cat.items[sig]){ cat.repeated.push({sig,names:[cat.items[sig].name,it.name]}); continue; } // 1ª linha vale
+    cat.items[sig]=it;
+    [sig,...cAlt.map(c=>String(r[c]??'').toUpperCase().replace(/\s+/g,'')).filter(Boolean)].forEach(a=>{
+      if(cat.alias[a] && cat.alias[a]!==sig){ cat.conflicts.push({alias:a,em:[cat.alias[a],sig]}); return; }
+      cat.alias[a]=sig;
+    });
+  }
+  return cat;
+}
+// Dias de atendimento (segunda a sábado) entre duas datas, inclusive
+function workDays(from,to){ let n=0,d=from; while(d<=to){ if(parseISO(d).getDay()!==0) n++; d=addDays(d,1); } return n; }
+// Análises dos exames importados: mês a mês por dia útil (meses têm tamanhos diferentes), grupos,
+// dia da semana e ritmo recente. Índice sazonal só é confiável com 12 meses ou mais.
+function examAnalytics(vols, catalog){
+  if(!vols || !vols.length) return null;
+  const items=(catalog&&catalog.items)||{};
+  const first=vols.reduce((a,v)=>a<v.start?a:v.start,'9999-12-31'), last=vols.reduce((a,v)=>a>v.end?a:v.end,'0000-01-01');
+  const byM={}, byG={}, byEx={}, dow=[0,0,0,0,0,0,0];
+  vols.forEach(v=>{
+    const ym=String(v.end).slice(0,7), q=Number(v.qty)||0, it=items[String(v.exam).toUpperCase()]||null;
+    const o=(byM[ym]=byM[ym]||{ym,total:0,fat:0,custo:0,semPreco:0,semCusto:0,byExam:{}}); o.total+=q; o.byExam[v.exam]=(o.byExam[v.exam]||0)+q;
+    if(it && it.price>0) o.fat+=q*it.price; else o.semPreco+=q;
+    if(it && it.cost>0) o.custo+=q*it.cost; else o.semCusto+=q;
+    const g=it&&it.group?it.group:'Sem grupo'; (byG[g]=byG[g]||{g,total:0,m:{}}); byG[g].total+=q; byG[g].m[ym]=(byG[g].m[ym]||0)+q;
+    (byEx[v.exam]=byEx[v.exam]||{exam:v.exam,name:it?it.name:'',total:0,m:{}}); byEx[v.exam].total+=q; byEx[v.exam].m[ym]=(byEx[v.exam].m[ym]||0)+q;
+    if(v.start===v.end) dow[parseISO(v.start).getDay()]+=q;
+  });
+  const months=Object.values(byM).sort((a,b)=>a.ym.localeCompare(b.ym));
+  months.forEach(m=>{
+    const ini=m.ym+'-01', fim=lastDayOfMonth(ini);
+    m.parcial = (m.ym===last.slice(0,7) && last<fim) || (m.ym===first.slice(0,7) && first>addDays(ini,6));
+    m.dias=workDays(m.ym===first.slice(0,7)&&m.parcial?first:ini, m.ym===last.slice(0,7)?minDate(last,fim):fim);
+    m.porDia=m.dias>0?m.total/m.dias:null;
+  });
+  const cheios=months.filter(m=>!m.parcial && m.porDia);
+  const media=cheios.length?cheios.reduce((s,m)=>s+m.porDia,0)/cheios.length:null;
+  months.forEach((m,i)=>{ m.idx=(media&&m.porDia)?m.porDia/media:null; const pv=months[i-1]; m.delta=(pv&&pv.porDia&&m.porDia)?m.porDia/pv.porDia-1:null; });
+  const recentes=cheios.slice(-2), anteriores=cheios.slice(0,-2);
+  const ritmo=(recentes.length && anteriores.length)? (recentes.reduce((s,m)=>s+m.porDia,0)/recentes.length)/(anteriores.reduce((s,m)=>s+m.porDia,0)/anteriores.length)-1 : null;
+  const total=months.reduce((s,m)=>s+m.total,0);
+  const monthsSet=new Set(months.map(m=>m.ym.slice(5,7)));
+  return {first,last,months,media,nCheios:cheios.length,confiavel:cheios.length>=12,total,ritmo,
+    mesesNuncaVistos:MESES.filter((_,i)=>!monthsSet.has(String(i+1).padStart(2,'0'))),
+    groups:Object.values(byG).sort((a,b)=>b.total-a.total), exams:Object.values(byEx).sort((a,b)=>b.total-a.total), dow,
+    temCatalogo:Object.keys(items).length>0};
+}
 function validateExamRows(rows, map, gran, firstLine){
   firstLine=firstLine||2;
   const res={valid:[],errors:[],blank:0,fatal:null,duplicates:0,first:null,last:null,total:0,exams:new Set()};
@@ -1853,10 +2218,10 @@ function buildExportData(filter){
     {Item:'Parcelas', Valor:insts.length},
     {Item:'Observação', Valor:'Lotes e Reposição refletem a posição atual do estoque. CMV = Est. Inicial + Compras − Est. Final.'}
   ]});
-  sheets.push({name:'CMV por Período', cols:['Período','Tipo','Início','Fim','Status','Est. Inicial (R$)','Compras (R$)','Est. Final (R$)','CMV (R$)','Perdas (R$)','CMV Consumo (R$)','Faturamento Semanal (R$)','Terceirizados (R$)','CMV %','CMV % s/ internos','CMV % média 4 períodos'],
+  sheets.push({name:'CMV por Período', cols:['Período','Tipo','Início','Fim','Status','Est. Inicial (R$)','Compras (R$)','Est. Final (R$)','CMV (R$)','Perdas (R$)','CMV Consumo (R$)','Faturamento Semanal (R$)','Terceirizados (R$)','CMV %','CMV % s/ internos','CMV % média 4 períodos','Dentro da Análise de CMV'],
     rows:series.filter(d=>periods.some(p=>p.id===d.p.id)).map(d=>({'Período':d.p.label,'Tipo':d.p.typeLabel,'Início':d.p.start,'Fim':d.p.end,'Status':d.p.status,
       'Est. Inicial (R$)':d.ei,'Compras (R$)':d.compras,'Est. Final (R$)':d.ef,'CMV (R$)':d.cmv,'Perdas (R$)':d.perdas,'CMV Consumo (R$)':d.consumo,
-      'Faturamento Semanal (R$)':d.revenue,'Terceirizados (R$)':d.revenue!==null?d.outsourced:null,'CMV %':d.pct,'CMV % s/ internos':d.pctInt,'CMV % média 4 períodos':d.rolling4}))});
+      'Faturamento Semanal (R$)':d.revenue,'Terceirizados (R$)':d.revenue!==null?d.outsourced:null,'CMV %':d.pct,'CMV % s/ internos':d.pctInt,'CMV % média 4 períodos':d.rolling4,'Dentro da Análise de CMV':d.inScope?'Sim':'Não'}))});
   sheets.push({name:'Faturamento Mensal', cols:['Mês','Faturamento Bruto (R$)','Terceirizados (R$)','Fonte do Faturamento','Períodos no Mês','Períodos Completos','CMV (R$)','Perdas (R$)','CMV %','CMV % s/ internos'],
     rows:months.map(ym=>{const m=monthSummary(ym); return {'Mês':ym,'Faturamento Bruto (R$)':m.rev,'Terceirizados (R$)':m.rev!==null?m.outs:null,'Fonte do Faturamento':m.fonte||'não lançado',
       'Períodos no Mês':m.nPeriods,'Períodos Completos':m.nCompletos,'CMV (R$)':m.cmv,'Perdas (R$)':m.perdas,'CMV %':m.pct,'CMV % s/ internos':m.pctInt};})});
@@ -1881,12 +2246,12 @@ function buildExportData(filter){
     rows:rep.rows.map(r=>({'Produto':r.p.name,'Categoria':r.p.cat,'Estoque Atual':r.res.stock,'Unid. Estoque':r.p.stockUnit,'Consumo Semanal':r.weekly,'Cobertura (dias)':r.coverage,'Ruptura Prevista':r.ruptura,
       'Prazo Entrega (dias)':r.lead,'Pedir Até':r.pedirAte,'Situação':STATUS_LABEL[r.status]||r.status,'Sugestão (unid. compra)':r.sugUnits,'Unid. Compra':r.p.purchaseUnit,'Custo Sugestão (R$)':r.sugCost,
       'Validade Mais Próxima':r.nearestExpiry,'Qtd em Risco':r.riskQty,'Risco de Perda (R$)':r.riskVal,'Tempo Médio em Estoque (dias)':r.avgDays}))});
-  sheets.push({name:'Produtos', cols:['ID','Nome','Categoria','Unid. Compra','Unid. Estoque','Fator','Custo/Unid. Compra (R$)','Custo/Unid. Estoque (R$)','Sub-unidade','Qtd Sub-unid.','Est. Mínimo','Prazo Entrega (dias)','Controla Validade','Preço Cobrado (R$)','Exames por Unid. Estoque','Fornecedores'],
+  sheets.push({name:'Produtos', cols:['ID','Nome','Categoria','Unid. Compra','Unid. Estoque','Fator','Custo/Unid. Compra (R$)','Custo/Unid. Estoque (R$)','Sub-unidade','Qtd Sub-unid.','Est. Mínimo','Prazo Entrega (dias)','Controla Validade','Aviso de Validade (dias)','Insumo Compartilhado','Siglas Workvet','Preço Cobrado (R$)','Exames por Unid. Estoque','Fornecedores'],
     rows:S.products.map(p=>({'ID':p.id,'Nome':p.name,'Categoria':p.cat,'Unid. Compra':p.purchaseUnit,'Unid. Estoque':p.stockUnit,'Fator':p.convFactor,'Custo/Unid. Compra (R$)':p.purchaseCost,'Custo/Unid. Estoque (R$)':p.cost,
-      'Sub-unidade':p.subUnitLabel||'','Qtd Sub-unid.':p.subUnitQty||null,'Est. Mínimo':p.min,'Prazo Entrega (dias)':p.leadTime,'Controla Validade':p.tracksExpiry?'Sim':'Não','Preço Cobrado (R$)':p.salePrice||null,'Exames por Unid. Estoque':p.examsPerUnit||null,'Fornecedores':(p.supps||[]).map(sname).join(', ')}))});
-  const mgx=stockMargin(rep);
-  sheets.push({name:'Margem Potencial Estoque', cols:['Produto','Estoque Atual','Unid. Estoque','Custo/Unid. Estoque (R$)','Custo do Estoque (R$)','Exames por Unid.','Exames Possíveis','Preço Cobrado (R$)','Receita Potencial (R$)','Margem Potencial (R$)','Margem Potencial %','Situação (estimativa, não é lucro realizado)'],
-    rows:mgx.rows.map(x=>({'Produto':x.p.name,'Estoque Atual':x.qty,'Unid. Estoque':x.unit,'Custo/Unid. Estoque (R$)':x.cost,'Custo do Estoque (R$)':x.costVal,'Exames por Unid.':x.examsPerUnit||null,'Exames Possíveis':x.exams,'Preço Cobrado (R$)':x.price||null,'Receita Potencial (R$)':x.revenue,'Margem Potencial (R$)':x.margin,'Margem Potencial %':x.pct,'Situação (estimativa, não é lucro realizado)':x.status==='ok'?'Calculado':(MG_STATUS[x.status]||x.status)}))});
+      'Sub-unidade':p.subUnitLabel||'','Qtd Sub-unid.':p.subUnitQty||null,'Est. Mínimo':p.min,'Prazo Entrega (dias)':p.leadTime,'Controla Validade':p.tracksExpiry?'Sim':'Não','Aviso de Validade (dias)':p.expiryAlertDays,'Insumo Compartilhado':p.sharedUse?'Sim':'Não','Siglas Workvet':p.examCodes||'','Preço Cobrado (R$)':p.salePrice||null,'Exames por Unid. Estoque':p.examsPerUnit||null,'Fornecedores':(p.supps||[]).map(sname).join(', ')}))});
+  const mgx=stockMargin(rep, S.examVols);
+  sheets.push({name:'Margem Potencial Estoque', cols:['Produto','Uso','Estoque Atual','Unid. Estoque','Custo/Unid. Estoque (R$)','Custo do Estoque (R$)','Dura (meses)','Custo por Mês (R$)','Exames por Mês (consumo)','Receita por Mês (R$)','Margem por Mês (R$)','Exames por Unid.','Exames Possíveis','Preço Cobrado (R$)','Receita Potencial (R$)','Margem Potencial (R$)','Margem Potencial %','Situação (estimativa, não é lucro realizado)'],
+    rows:mgx.rows.map(x=>({'Produto':x.p.name,'Uso':x.shared?'Compartilhado':'Exclusivo','Estoque Atual':x.qty,'Unid. Estoque':x.unit,'Custo/Unid. Estoque (R$)':x.cost,'Custo do Estoque (R$)':x.costVal,'Dura (meses)':x.coverageMonths,'Custo por Mês (R$)':x.costMonth,'Exames por Mês (consumo)':x.examsMonth,'Receita por Mês (R$)':x.revMonth,'Margem por Mês (R$)':x.marginMonth,'Exames por Unid.':x.examsPerUnit||null,'Exames Possíveis':x.exams,'Preço Cobrado (R$)':x.price||null,'Receita Potencial (R$)':x.revenue,'Margem Potencial (R$)':x.margin,'Margem Potencial %':x.pct,'Situação (estimativa, não é lucro realizado)':x.status==='ok'?'Calculado':(MG_STATUS[x.status]||x.status)}))});
   sheets.push({name:'Exames Realizados', cols:['Início','Fim','Exame','Quantidade','Granularidade','Arquivo'], rows:(S.examVols||[]).map(v=>({'Início':v.start,'Fim':v.end,'Exame':v.exam,'Quantidade':v.qty,'Granularidade':(S.raw.exam_volumes||[]).find(r=>r.id===v.id)?.granularity||'','Arquivo':v.file}))});
   sheets.push({name:'Fornecedores', cols:['ID','Nome','Contato','Telefone'], rows:S.suppliers.map(s=>({'ID':s.id,'Nome':s.name,'Contato':s.contact||'','Telefone':s.phone||''}))});
   sheets.push({name:'Unidades', cols:['Unidade'], rows:(S.units||[]).map(u=>({'Unidade':u.name}))});
@@ -1917,9 +2282,9 @@ function buildExportData(filter){
     app_settings:RAW.app_settings||[]
   };
   const calc={}; sheets.slice(1).forEach(sh=>{ if(['CMV por Período','Faturamento Mensal','Lotes','Reposição e Validade','Compras Parceladas','Margem Potencial Estoque'].includes(sh.name)) calc[sh.name]=sh.rows; });
-  return {meta:{sistema:'PetLab — Controle de Estoque', versao:'v7.2', gerado_em:new Date().toISOString(), filtro:{...filter, descricao:descr}}, sheets, raw, calc};
+  return {meta:{sistema:'PetLab — Controle de Estoque', versao:'v7.3', gerado_em:new Date().toISOString(), filtro:{...filter, descricao:descr}}, sheets, raw, calc};
 }
-const MG_STATUS={'sem-preco':'Falta preço','sem-rendimento':'Falta rendimento (exames por unidade)','sem-custo':'Sem custo','sem-estoque':'Sem estoque','sem-contagem':'Sem contagem'};
+const MG_STATUS={'compartilhado':'Compartilhado: custo de apoio, sem receita própria','sem-preco':'Falta preço','sem-rendimento':'Falta rendimento (exames por unidade)','sem-custo':'Sem custo','sem-estoque':'Sem estoque','sem-contagem':'Sem contagem'};
 const STATUS_LABEL={'atrasado':'Pedido atrasado','esta-semana':'Pedir esta semana','abaixo-minimo':'Abaixo do mínimo','sem-historico':'Sem histórico de consumo','sem-contagem':'Sem contagem','ok':'OK'};
 // Monta uma planilha com formatos: datas como data, R$ com 2 casas, % como percentual
 function sheetFromRows(XLSXlib, sh){
@@ -1959,6 +2324,9 @@ let S = { products:[], suppliers:[], periods:[], counts:[], purchases:[], units:
           losses:[], monthlyRevenue:[], examVols:[], settings:{}, raw:{} };
 let prodCatFilter = '';
 let repFilter = 'acao';
+// Planejamento Semanal fica OCULTO: repetia o que Caixa e Compras + Compras já mostram.
+// Os dados não foram apagados. Para mostrar de novo, troque para true.
+const SHOW_PLAN = false;
 
 // ─── LOADING & TOAST ──────────────────────────────────────────
 function setLoading(v){ document.getElementById('loader').style.display = v ? 'flex' : 'none'; }
@@ -1972,20 +2340,29 @@ function toast(msg, type='ok'){
 
 // ─── DATA LOADING ─────────────────────────────────────────────
 // S.raw guarda as linhas exatamente como vêm do Supabase — usado na exportação JSON
-const TBL_NOME={units:'Unidades',purchase_plan:'Planejamento Semanal',stock_losses:'Perdas',exam_volumes:'Exames Realizados',monthly_revenue:'Faturamento Mensal',app_settings:'Configurações (meta de CMV)',commitments:'Caixa e Compras'};
+const TBL_NOME={'v7.3':'Campos novos da v7.3',units:'Unidades',purchase_plan:'Planejamento Semanal',stock_losses:'Perdas',exam_volumes:'Exames Realizados',monthly_revenue:'Faturamento Mensal',app_settings:'Configurações (meta de CMV)',commitments:'Caixa e Compras'};
 function loadWarn(t,error){ (S.loadWarn=S.loadWarn||[]).push({t,msg:(error&&error.message)||String(error)}); }
 function renderLoadWarn(){
   const el=document.getElementById('db-warn'); if(!el) return;
   const w=S.loadWarn||[];
   el.style.display=w.length?'flex':'none';
   if(w.length) el.querySelector('span:last-child').innerHTML='<strong>Parte dos dados não pôde ser lida do banco</strong>, por isso pode parecer que algo não foi salvo: '
-    +w.map(x=>`${TBL_NOME[x.t]||x.t} (${x.msg})`).join('; ')+'. Rode as migrações no Supabase (migracao_v7.sql e migracao_v7_2.sql) e recarregue a página.';
+    +w.map(x=>`${TBL_NOME[x.t]||x.t} (${x.msg})`).join('; ')+'. Rode as migrações no Supabase (migracao_v7.sql, migracao_v7_2.sql e migracao_v7_3.sql) e recarregue a página.';
+}
+// v7.3: verifica se as colunas novas existem. Sem elas o sistema funciona e só não grava os campos novos.
+async function probeCols(){
+  S.has=S.has||{};
+  const [a,b]=await Promise.all([
+    sb.from('commitments').select('payment_terms,invoice_number').limit(1),
+    sb.from('products').select('expiry_alert_days,shared_use,exam_codes').limit(1)]);
+  S.has.commitV73=!a.error; S.has.prodV73=!b.error;
+  if(!S.has.commitV73 || !S.has.prodV73) loadWarn('v7.3',{message:'forma de pagamento da nota, aviso de validade por produto e insumo compartilhado ainda não são gravados'});
 }
 async function loadAll(){
   setLoading(true);
   S.loadWarn=[];
   try {
-    await Promise.all([loadSuppliers(), loadProducts(), loadPeriods(), loadCounts(), loadPurchases(), loadUnits(), loadPlan(), loadCommitments(), loadLosses(), loadRevenue(), loadSettings(), loadExams()]);
+    await Promise.all([loadSuppliers(), loadProducts(), loadPeriods(), loadCounts(), loadPurchases(), loadUnits(), loadPlan(), loadCommitments(), loadLosses(), loadRevenue(), loadSettings(), loadExams(), probeCols()]);
     // Regra P1: cada período abre com o fechamento do anterior (só preenche aberturas vazias)
     const links = computeChainLinks();
     if(links.length){
@@ -2028,7 +2405,11 @@ async function loadProducts(){
     return {
       ...p,
       cat: p.cat,
-      min: parseFloat(p.min_stock) || 0,
+      // vazio = sem estoque mínimo; 0 é um mínimo válido (alerta quando zera)
+      min: (p.min_stock===null||p.min_stock===undefined||p.min_stock==='') ? null : (parseFloat(p.min_stock)||0),
+      expiryAlertDays: (p.expiry_alert_days===null||p.expiry_alert_days===undefined) ? null : parseInt(p.expiry_alert_days),
+      sharedUse: !!p.shared_use,
+      examCodes: p.exam_codes || '',
       cost: parseFloat(p.unit_cost) || 0,         // custo por UNIDADE DE ESTOQUE
       purchaseUnit: p.purchase_unit || 'Unidade',
       stockUnit: p.unit || 'Unidade',              // 'unit' no DB = unidade de estoque
@@ -2138,7 +2519,8 @@ async function loadCommitments(){
   S.commits = c.data.map(x=>({
     id:x.id, suppId:x.supplier_id, desc:x.description||'',
     date:x.purchase_date, total:parseFloat(x.total_amount)||0,
-    n:x.installments||1, notes:x.notes||''
+    n:x.installments||1, notes:x.notes||'',
+    invoice:x.invoice_number||'', terms:x.payment_terms||null
   }));
   S.installments = i.data.map(x=>({
     id:x.id, commitId:x.commitment_id, seq:x.seq_no,
@@ -2158,37 +2540,45 @@ async function loadLosses(){
 // ─── MARGEM POTENCIAL (painel na Reposição) ───────────────────
 const MG_MSG={'sem-preco':'Falta o preço cobrado','sem-rendimento':'Falta informar quantos exames rende 1 unidade','sem-custo':'Sem custo cadastrado'};
 function renderMargin(rep){
-  const mg=stockMargin(rep), t=mg.tot;
+  const mg=stockMargin(rep, S.examVols), t=mg.tot;
   const cards=document.getElementById('mg-cards'); if(!cards) return;
   cards.innerHTML=`
-    <div class="stat-card"><div class="lbl">Custo do Estoque (itens calculados)</div><div class="val">${R(t.costVal)}</div><div class="sub">${t.n} de ${t.nComEstoque} produtos com estoque</div></div>
-    <div class="stat-card"><div class="lbl">Receita Potencial</div><div class="val">${R(t.revenue)}</div><div class="sub">Exames possíveis × preço cobrado</div></div>
-    <div class="stat-card"><div class="lbl">Margem Potencial</div><div class="val">${R(t.margin)}</div><div class="sub">${t.pct!==null?P(t.pct)+' da receita potencial':'—'}</div></div>
-    <div class="stat-card c-warn"><div class="lbl">Fora do Cálculo</div><div class="val">${R(t.costValSemDados)}</div><div class="sub">Custo de estoque sem preço ou rendimento</div></div>`;
-  const ord={'ok':0,'sem-rendimento':1,'sem-preco':2,'sem-custo':3,'sem-estoque':4,'sem-contagem':5};
+    <div class="stat-card c-primary"><div class="lbl">Margem por mês (estimada)</div><div class="val">${t.nMonth?R(t.marginMonth):'—'}</div><div class="sub">${t.pctMonth!==null?P(t.pctMonth)+' da receita/mês · já desconta compartilhados':'Precisa de consumo (2 contagens) e preço'}</div></div>
+    <div class="stat-card"><div class="lbl">Receita por mês pelos insumos</div><div class="val">${t.nMonth?R(t.revMonth):'—'}</div><div class="sub">${t.nMonth} insumo(s) exclusivos com preço e rendimento</div></div>
+    <div class="stat-card"><div class="lbl">Custo de insumos por mês</div><div class="val">${R(t.costMonthExcl+t.costMonthShared)}</div><div class="sub">${R(t.costMonthExcl)} exclusivos + ${R(t.costMonthShared)} compartilhados (${t.nShared})</div></div>
+    <div class="stat-card c-warn"><div class="lbl">Fora do cálculo</div><div class="val">${R(t.costValSemDados)}</div><div class="sub">Estoque sem preço ou rendimento cadastrado</div></div>`;
+  const ord={'ok':0,'compartilhado':1,'sem-rendimento':2,'sem-preco':3,'sem-custo':4,'sem-estoque':5,'sem-contagem':6};
   const list=[...mg.rows].filter(x=>x.status!=='sem-estoque').sort((a,b)=>ord[a.status]-ord[b.status]||a.p.name.localeCompare(b.p.name));
+  const temReal=list.some(x=>x.realizedMonth!==null);
+  const dura=x=>x.coverageMonths===null?'—':(x.coverageMonths<1?N(x.coverageMonths*DIAS_MES,0)+' dias':N(x.coverageMonths,1)+' meses');
   document.getElementById('mg-tbody').innerHTML=list.length?list.map(x=>{
     const su=x.unit;
-    if(x.status!=='ok') return `<tr><td><strong>${x.p.name}</strong><div class="rp-tag">${x.p.cat}</div></td>
-      <td style="text-align:right" class="mono">${x.status==='sem-contagem'?'—':N(x.qty,2)+' <span class="text-muted" style="font-size:11px">'+su+'</span>'}</td>
-      <td style="text-align:right" class="mono">${x.status==='sem-contagem'?'—':R(x.costVal)}</td>
-      <td colspan="5"><span class="badge b-gray">${x.status==='sem-contagem'?'Sem contagem':(MG_MSG[x.status]||x.status)}</span>
-        ${x.status!=='sem-contagem'?`<button class="btn btn-sm btn-outline" style="margin-left:6px" onclick="editProduct(${x.p.id})">Preencher</button>`:''}</td></tr>`;
-    return `<tr><td><strong>${x.p.name}</strong><div class="rp-tag">${x.p.cat}</div></td>
-      <td style="text-align:right" class="mono">${N(x.qty,2)} <span class="text-muted" style="font-size:11px">${su}</span></td>
-      <td style="text-align:right" class="mono">${R(x.costVal)}<div class="rp-tag">${R(x.cost)}/${su}</div></td>
-      <td style="text-align:right" class="mono">${N(x.exams,1)}<div class="rp-tag">${N(x.examsPerUnit,2)} por ${su}</div></td>
-      <td style="text-align:right" class="mono">${R(x.price)}</td>
-      <td style="text-align:right" class="mono">${R(x.revenue)}</td>
-      <td style="text-align:right" class="mono fw6 ${x.margin<0?'text-danger':''}">${R(x.margin)}</td>
-      <td style="text-align:right">${x.pct!==null?P(x.pct):'—'}</td></tr>`;
-  }).join(''):'<tr><td colspan="8"><div class="empty"><p>Faça a contagem de implantação para calcular.</p></div></td></tr>';
+    const est=x.status==='sem-contagem'?'—':`<span style="white-space:nowrap">${N(x.qty,2)} <span class="text-muted" style="font-size:11px">${su}</span></span><div class="rp-tag" style="white-space:nowrap">${R(x.costVal)}</div><div class="rp-tag" style="white-space:nowrap">dura ${dura(x)}</div>`;
+    const real=temReal?`<td style="text-align:right" class="mono">${x.realizedMonth!==null?N(x.realizedMonth,0)+(x.examsMonth?`<div class="rp-tag" title="Exames feitos ÷ exames que o consumo deveria render">${P(x.realizedMonth/x.examsMonth)} do esperado</div>`:''):'—'}</td>`:'';
+    if(x.status==='compartilhado') return `<tr><td><strong>${x.p.name}</strong><div class="rp-tag">${x.p.cat}</div></td><td><span class="badge b-gray">Compartilhado</span></td>
+      <td style="text-align:right" class="mono">${est}</td><td style="text-align:right" class="mono">${x.costMonth!==null?R(x.costMonth):'—'}</td>
+      <td colspan="3" class="text-muted" style="font-size:12px">Sem receita própria: o custo/mês é descontado da margem total</td>${real}<td style="text-align:right" class="text-muted">—</td></tr>`;
+    if(x.status!=='ok') return `<tr><td><strong>${x.p.name}</strong><div class="rp-tag">${x.p.cat}</div></td><td><span class="badge b-gray">${x.status==='sem-contagem'?'Sem contagem':(MG_MSG[x.status]||x.status)}</span></td>
+      <td style="text-align:right" class="mono">${est}</td><td style="text-align:right" class="mono">${x.costMonth!==null?R(x.costMonth):'—'}</td>
+      <td colspan="${temReal?5:4}">${x.status!=='sem-contagem'?`<button class="btn btn-sm btn-outline" onclick="editProduct(${x.p.id})">Preencher</button> <span class="text-muted" style="font-size:11px">ou marque como compartilhado</span>`:''}</td></tr>`;
+    return `<tr><td><strong>${x.p.name}</strong><div class="rp-tag">${x.p.cat}</div></td><td><span class="badge b-ok">Exclusivo</span></td>
+      <td style="text-align:right" class="mono">${est}</td>
+      <td style="text-align:right" class="mono">${x.costMonth!==null?R(x.costMonth):'—'}</td>
+      <td style="text-align:right" class="mono">${x.examsMonth!==null?N(x.examsMonth,0):'—'}<div class="rp-tag">${N(x.examsPerUnit,2)} por ${su} · ${R(x.price)}</div></td>
+      <td style="text-align:right" class="mono">${x.revMonth!==null?R(x.revMonth):'—'}</td>
+      <td style="text-align:right" class="mono fw6 ${x.marginMonth<0?'text-danger':''}">${x.marginMonth!==null?R(x.marginMonth):'—'}</td>${real}
+      <td style="text-align:right" class="mono" title="Margem de todo o estoque atual, que dura ${dura(x)}">${R(x.margin)}<div class="rp-tag">${x.pct!==null?P(x.pct):''}</div></td></tr>`;
+  }).join(''):'<tr><td colspan="9"><div class="empty"><p>Faça a contagem de implantação para calcular.</p></div></td></tr>';
+  const th=document.getElementById('mg-thead');
+  if(th) th.innerHTML=`<tr><th>Produto</th><th>Uso</th><th style="text-align:right">Estoque</th><th style="text-align:right">Custo/mês</th><th style="text-align:right">Exames/mês (pelo consumo)</th><th style="text-align:right">Receita/mês</th><th style="text-align:right">Margem/mês</th>${temReal?'<th style="text-align:right" title="Média dos últimos 3 meses completos importados do Workvet, pelas siglas cadastradas no produto">Feitos/mês (Workvet)</th>':''}<th style="text-align:right">Margem do estoque todo</th></tr>`;
 }
 
 // ─── EXAMES REALIZADOS: importação configurável + sazonalidade ──
-let EX={wb:null, rows:[], fileName:'', val:null};
+let EX={wb:null, rows:[], fileName:'', val:null, sheetIdx:0, siblings:[], catalog:null, catSheet:''};
 const EX_COLS=['date','dateEnd','exam','qty'];
 function exColLabel(i){ let s='',n=i; do{ s=String.fromCharCode(65+n%26)+s; n=Math.floor(n/26)-1; }while(n>=0); return s; }
+function exAoa(i){ const ws=EX.wb.Sheets[EX.wb.SheetNames[i]]; return XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:null,blankrows:false}); }
+function exHeadKey(row){ return (row||[]).map(x=>String(x??'').trim().toLowerCase()).filter(Boolean).join('|'); }
 function exLoadFile(inp){
   const f=inp.files&&inp.files[0]; if(!f) return;
   if(typeof XLSX==='undefined'){ alert('A biblioteca de Excel não carregou (verifique a internet).'); return; }
@@ -2198,57 +2588,103 @@ function exLoadFile(inp){
     try{
       // CSV é lido como texto cru: o Excel/SheetJS não pode reinterpretar datas dd/mm como mm/dd
       EX.wb=isCsv ? XLSX.read(e.target.result,{type:'string',raw:true}) : XLSX.read(e.target.result,{type:'array'});
-      document.getElementById('ex-sheet').innerHTML=EX.wb.SheetNames.map((n,i)=>`<option value="${i}">${n}</option>`).join('');
+      // Tabela de Preços (catálogo de siglas), se a planilha tiver
+      EX.catalog=null; EX.catSheet='';
+      for(let i=0;i<EX.wb.SheetNames.length && !EX.catalog;i++){ const c=parseExamCatalog(exAoa(i)); if(c && Object.keys(c.items).length){ EX.catalog=c; EX.catSheet=EX.wb.SheetNames[i]; } }
+      // Abre na primeira aba que tem Data + Exames e dados (no arquivo da equipe: "Dados Janeiro")
+      let pick=0;
+      for(let i=0;i<EX.wb.SheetNames.length;i++){ const a=exAoa(i); const h=exHeadKey(a[0]); if(h.includes('data') && h.includes('exames') && a.length>1){ pick=i; break; } }
+      document.getElementById('ex-sheet').innerHTML=EX.wb.SheetNames.map((n,i)=>`<option value="${i}"${i===pick?' selected':''}>${n}</option>`).join('');
       exSheetChange();
     }catch(err){ alert('Não consegui ler o arquivo: '+err.message); }
   };
   if(isCsv) rd.readAsText(f); else rd.readAsArrayBuffer(f);
 }
 function exSheetChange(){
-  const ws=EX.wb.Sheets[EX.wb.SheetNames[parseInt(document.getElementById('ex-sheet').value)||0]];
-  EX.rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:null,blankrows:false});
+  EX.sheetIdx=parseInt(document.getElementById('ex-sheet').value)||0;
+  EX.rows=exAoa(EX.sheetIdx);
   document.getElementById('ex-hdr').value=1;
   document.getElementById('ex-map').style.display='block';
+  exFindSiblings();
   exRebuild(true);
+}
+// Outras abas com o MESMO cabeçalho e com dados (ex.: Dados Janeiro … Dados Outubro): importa tudo de uma vez
+function exFindSiblings(){
+  const h=Math.max(1,parseInt(document.getElementById('ex-hdr').value)||1);
+  const key=exHeadKey(EX.rows[h-1]);
+  EX.siblings=[];
+  if(key) EX.wb.SheetNames.forEach((n,i)=>{ const a=i===EX.sheetIdx?EX.rows:exAoa(i); if(exHeadKey(a[h-1])===key && a.length>h) EX.siblings.push({i,name:n,rows:a}); });
 }
 function exRebuild(auto){
   const h=Math.max(1,parseInt(document.getElementById('ex-hdr').value)||1);
+  if(!auto) exFindSiblings();
   const head=EX.rows[h-1]||[]; const ncol=Math.max(head.length,...EX.rows.slice(h,h+50).map(r=>r.length),0);
   const opts=['<option value="">— não usar —</option>'].concat(Array.from({length:ncol},(_,i)=>`<option value="${i}">${exColLabel(i)}: ${head[i]!==null&&head[i]!==undefined&&String(head[i]).trim()!==''?String(head[i]).trim():'(sem título)'}</option>`)).join('');
   const prev={}; EX_COLS.forEach(c=>prev[c]=document.getElementById('ex-c-'+c).value);
   EX_COLS.forEach(c=>document.getElementById('ex-c-'+c).innerHTML=opts);
-  // Reaproveita o mapeamento salvo só se os títulos do arquivo forem os mesmos (nunca adivinha)
+  // Reaproveita o mapeamento salvo só se os títulos do arquivo forem os mesmos
   const saved=(S.settings&&S.settings.exam_map)?(()=>{try{return JSON.parse(S.settings.exam_map);}catch(e){return null;}})():null;
   const titles=head.map(x=>String(x??'').trim());
+  const low=titles.map(x=>x.toLowerCase());
+  let usedSaved=false;
   EX_COLS.forEach(c=>{
     let v=prev[c];
-    if(auto && saved && saved.map && saved.map[c]){ const i=titles.indexOf(saved.map[c]); if(i>=0) v=String(i); }
+    if(auto && saved && saved.map && saved.map[c]){ const i=titles.indexOf(saved.map[c]); if(i>=0){ v=String(i); usedSaved=true; } }
     document.getElementById('ex-c-'+c).value=v||'';
   });
-  if(auto && saved && saved.gran) document.getElementById('ex-gran').value=saved.gran;
+  if(auto && saved && saved.gran && usedSaved) document.getElementById('ex-gran').value=saved.gran;
+  // Formato do relatório do Workvet (Data, Código, Animal, Clinica, Unidade, Exames): pré-seleciona e avisa
+  const det=document.getElementById('ex-detect');
+  const iD=low.indexOf('data'), iE=low.indexOf('exames');
+  if(auto && !usedSaved && iD>=0 && iE>=0){
+    document.getElementById('ex-c-date').value=String(iD); document.getElementById('ex-c-exam').value=String(iE);
+    document.getElementById('ex-c-qty').value=''; document.getElementById('ex-gran').value='ficha';
+    det.style.display='flex'; det.querySelector('span:last-child').innerHTML='Formato do relatório do <strong>Workvet</strong> reconhecido: coluna <strong>Data</strong> e coluna <strong>Exames</strong> (siglas). Confira a prévia abaixo.';
+  } else det.style.display='none';
   exPreview();
 }
 function exReadMap(){ const g=id=>document.getElementById(id).value; return {date:g('ex-c-date')===''?null:+g('ex-c-date'),dateEnd:g('ex-c-dateEnd')===''?null:+g('ex-c-dateEnd'),exam:g('ex-c-exam')===''?null:+g('ex-c-exam'),qty:g('ex-c-qty')===''?null:+g('ex-c-qty')}; }
+function exUseCatalog(){ return !!(EX.catalog && document.getElementById('ex-gran').value==='ficha' && document.getElementById('ex-cat').checked); }
 function exPreview(){
   const box=document.getElementById('ex-preview'), btn=document.getElementById('ex-import-btn');
   const h=Math.max(1,parseInt(document.getElementById('ex-hdr').value)||1);
-  const gran=document.getElementById('ex-gran').value;
+  const gran=document.getElementById('ex-gran').value, ficha=gran==='ficha';
   document.getElementById('ex-c-dateEnd-grp').style.display=gran==='intervalo'?'block':'none';
-  const body=EX.rows.slice(h), map=exReadMap();
-  const raw=body.slice(0,6).map(r=>`<tr>${(EX.rows[h-1]||[]).map((_,i)=>`<td style="font-size:12px">${r[i]===null||r[i]===undefined?'':String(r[i])}</td>`).join('')}</tr>`).join('');
-  let html=`<div class="conv-hint" style="margin:10px 0 4px">Como o arquivo foi lido (primeiras linhas, sem nenhuma interpretação):</div>
+  document.getElementById('ex-c-qty-grp').style.display=ficha?'none':'block';
+  document.getElementById('ex-c-exam-lbl').textContent=ficha?'Coluna dos exames (siglas) *':'Coluna do exame (opcional)';
+  document.getElementById('ex-c-exam-hint').textContent=ficha?'Cada sigla separada por vírgula conta 1 exame':'Sem ela, tudo entra como "(total)"';
+  const mg=document.getElementById('ex-multi-grp'), multiOk=EX.siblings.length>1;
+  mg.style.display=multiOk?'flex':'none';
+  if(multiOk) document.getElementById('ex-multi-lbl').innerHTML=`Importar as <strong>${EX.siblings.length} abas</strong> com este mesmo cabeçalho: ${EX.siblings.map(s=>s.name).join(', ')}`;
+  const cg=document.getElementById('ex-cat-grp');
+  cg.style.display=(EX.catalog && ficha)?'flex':'none';
+  if(EX.catalog) document.getElementById('ex-cat-lbl').innerHTML=`Usar a aba <strong>${EX.catSheet}</strong> (${Object.keys(EX.catalog.items).length} exames): junta siglas alternativas na sigla principal e traz nome, grupo e preço`;
+  const multi=multiOk && document.getElementById('ex-multi').checked;
+  const sheets=multi?EX.siblings:[{i:EX.sheetIdx,name:EX.wb.SheetNames[EX.sheetIdx],rows:EX.rows}];
+  const map=exReadMap(), cat=exUseCatalog()?EX.catalog:null;
+  const body=EX.rows.slice(h);
+  const raw=body.slice(0,6).map(r=>`<tr>${(EX.rows[h-1]||[]).map((_,i)=>`<td style="font-size:12px">${r[i]===null||r[i]===undefined?'':(r[i] instanceof Date?fmtDate(isoOf(r[i])):String(r[i]))}</td>`).join('')}</tr>`).join('');
+  let html=`<div class="conv-hint" style="margin:10px 0 4px">Como o arquivo foi lido (primeiras linhas da aba ${EX.wb.SheetNames[EX.sheetIdx]}, sem interpretação):</div>
     <div class="tbl-wrap" style="max-height:170px;overflow:auto"><table><thead><tr>${(EX.rows[h-1]||[]).map((c,i)=>`<th>${exColLabel(i)}: ${c??''}</th>`).join('')}</tr></thead><tbody>${raw}</tbody></table></div>`;
-  const v=validateExamRows(body,map,gran,h+1); EX.val=v;
+  const parts=sheets.map(s=>ficha ? validateFichaRows(s.rows.slice(h),map,h+1,cat,multi?s.name:'') : validateExamRows(s.rows.slice(h),map,gran,h+1));
+  const v=mergeExamResults(parts); EX.val=v;
   if(v.fatal){ html+=`<div class="alert alert-warn" style="margin-top:10px"><span>👉</span><span>${v.fatal}</span></div>`; btn.disabled=true; box.innerHTML=html; return; }
   const ag=aggregateExams(v.valid);
-  html+=`<div class="conv-hint" style="margin:12px 0 4px">Como o sistema vai interpretar (confira as datas, o formato assumido é dia/mês/ano):</div>
-    <div class="tbl-wrap"><table><thead><tr><th>Linha</th><th>Início</th><th>Fim</th><th>Exame</th><th style="text-align:right">Qtd</th></tr></thead><tbody>${v.valid.slice(0,6).map(x=>`<tr><td>${x.line}</td><td>${fmtDate(x.start)}</td><td>${fmtDate(x.end)}</td><td>${x.exam}</td><td style="text-align:right" class="mono">${N(x.qty,2)}</td></tr>`).join('')||'<tr><td colspan="5" class="text-muted">Nenhuma linha válida</td></tr>'}</tbody></table></div>
+  const nome=e=>cat&&cat.items[e]?` <span class="text-muted">${cat.items[e].name}</span>`:'';
+  html+=`<div class="conv-hint" style="margin:12px 0 4px">Como o sistema vai interpretar${ficha?' (somado por dia e sigla)':''}. Formato de data assumido: dia/mês/ano.</div>
+    <div class="tbl-wrap"><table><thead><tr>${ficha?'':'<th>Linha</th>'}<th>Início</th><th>Fim</th><th>Exame</th><th style="text-align:right">Qtd</th></tr></thead><tbody>${v.valid.slice(0,6).map(x=>`<tr>${ficha?'':`<td>${x.line}</td>`}<td>${fmtDate(x.start)}</td><td>${fmtDate(x.end)}</td><td>${x.exam}${nome(x.exam)}</td><td style="text-align:right" class="mono">${N(x.qty,2)}</td></tr>`).join('')||'<tr><td colspan="5" class="text-muted">Nenhuma linha válida</td></tr>'}</tbody></table></div>
     <div class="stats-grid" style="margin-top:12px">
-      <div class="stat-card ${v.valid.length?'c-ok':'c-danger'}"><div class="lbl">Linhas válidas</div><div class="val">${v.valid.length}</div><div class="sub">${v.blank} em branco ignoradas</div></div>
-      <div class="stat-card ${v.errors.length?'c-danger':'c-ok'}"><div class="lbl">Linhas com erro</div><div class="val">${v.errors.length}</div><div class="sub">${v.duplicates?v.duplicates+' repetidas (serão somadas)':'Sem repetidas'}</div></div>
-      <div class="stat-card"><div class="lbl">Período lido</div><div class="val" style="font-size:16px">${v.first?fmtDate(v.first)+' a '+fmtDate(v.last):'—'}</div><div class="sub">${ag.length} mês(es)</div></div>
-      <div class="stat-card"><div class="lbl">Total de exames</div><div class="val">${N(v.total,0)}</div><div class="sub">${v.exams.size} tipo(s) de exame</div></div></div>`;
-  if(v.errors.length) html+=`<div class="alert alert-warn" style="margin-top:10px"><span>⚠️</span><span><strong>Linhas com erro (primeiras 8):</strong><br>${v.errors.slice(0,8).map(e=>`linha ${e.line}: ${e.msg}`).join('<br>')}${v.errors.length>8?`<br>… e mais ${v.errors.length-8}`:''}</span></div>`;
+      <div class="stat-card ${v.valid.length?'c-ok':'c-danger'}"><div class="lbl">${ficha?'Fichas lidas':'Linhas válidas'}</div><div class="val">${N(ficha?v.fichas:v.valid.length,0)}</div><div class="sub">${v.blank} em branco ignoradas${v.semExame?' · '+v.semExame+' sem exame':''}</div></div>
+      <div class="stat-card ${v.errors.length?'c-danger':'c-ok'}"><div class="lbl">Linhas com erro</div><div class="val">${v.errors.length}</div><div class="sub">${ficha?(v.dupInFicha?v.dupInFicha+' sigla(s) repetida(s) na mesma ficha (contadas)':'Sem sigla repetida na ficha'):(v.duplicates?v.duplicates+' repetidas (serão somadas)':'Sem repetidas')}</div></div>
+      <div class="stat-card"><div class="lbl">Período lido</div><div class="val" style="font-size:16px">${v.first?fmtDate(v.first)+' a '+fmtDate(v.last):'—'}</div><div class="sub">${ag.length} mês(es)${multi?' · '+sheets.length+' abas':''}</div></div>
+      <div class="stat-card"><div class="lbl">Total de exames</div><div class="val">${N(v.total,0)}</div><div class="sub">${v.exams.size} sigla(s) diferentes</div></div></div>`;
+  if(ficha && ag.length>1) html+=`<div class="conv-hint" style="margin:4px 0">Exames por mês (confira com a aba Anual da planilha): ${ag.map(m=>`<strong>${monthLabel(m.ym).slice(0,3)}</strong> ${N(m.total,0)}`).join(' · ')}</div>`;
+  const unk=Object.entries(v.unknown||{}).sort((a,b)=>b[1]-a[1]);
+  if(cat && unk.length) html+=`<div class="alert alert-warn" style="margin-top:10px"><span>🔎</span><span><strong>${unk.length} sigla(s) fora da Tabela de Preços</strong> (entram com a própria sigla, sem nome nem preço): ${unk.slice(0,15).map(([s,q])=>`${s} (${q})`).join(', ')}${unk.length>15?'…':''}</span></div>`;
+  if(cat && (cat.conflicts.length || cat.repeated.length)) html+=`<div class="alert alert-warn" style="margin-top:10px"><span>⚠️</span><span><strong>Conferir na Tabela de Preços da planilha:</strong>
+    ${cat.repeated.map(r=>`a sigla <strong>${r.sig}</strong> aparece em mais de uma linha (${[...new Set(r.names)].join(' / ')}); aqui conta uma vez, na primeira linha`).join('; ')}${cat.repeated.length&&cat.conflicts.length?'; ':''}
+    ${cat.conflicts.map(c=>`a sigla alternativa <strong>${c.alias}</strong> está em ${c.em.join(' e ')}; aqui vale ${c.em[0]}`).join('; ')}.</span></div>`;
+  if(v.errors.length) html+=`<div class="alert alert-warn" style="margin-top:10px"><span>⚠️</span><span><strong>Linhas com erro (primeiras 8):</strong><br>${v.errors.slice(0,8).map(e=>`${typeof e.line==='number'?'linha '+e.line:e.line}: ${e.msg}`).join('<br>')}${v.errors.length>8?`<br>… e mais ${v.errors.length-8}`:''}</span></div>`;
   box.innerHTML=html;
   btn.disabled = !v.valid.length || (v.errors.length>0 && !document.getElementById('ex-ignore').checked);
 }
@@ -2256,7 +2692,7 @@ async function exImport(){
   const v=EX.val; if(!v||!v.valid.length) return;
   if(v.errors.length && !document.getElementById('ex-ignore').checked){ alert('Há linhas com erro. Corrija o arquivo ou marque para ignorá-las.'); return; }
   const replace=document.getElementById('ex-replace').checked;
-  if(!confirm(`Importar ${v.valid.length} linhas (${fmtDate(v.first)} a ${fmtDate(v.last)})${replace?'\nOs registros já importados dentro desse intervalo serão substituídos.':''}`)) return;
+  if(!confirm(`Importar ${N(v.total,0)} exames em ${v.valid.length} registros (${fmtDate(v.first)} a ${fmtDate(v.last)})${replace?'\nOs registros já importados dentro desse intervalo serão substituídos.':''}`)) return;
   setLoading(true);
   try{
     const batch='imp_'+Date.now(), gran=document.getElementById('ex-gran').value;
@@ -2267,7 +2703,8 @@ async function exImport(){
     const h=Math.max(1,parseInt(document.getElementById('ex-hdr').value)||1), head=(EX.rows[h-1]||[]).map(x=>String(x??'').trim()), m=exReadMap(), mm={};
     EX_COLS.forEach(c=>{ if(m[c]!==null) mm[c]=head[m[c]]; });
     await sb.from('app_settings').upsert({key:'exam_map', value:JSON.stringify({map:mm,gran})}); // só conveniência: falha aqui não afeta os dados
-    toast(`${recs.length} linhas importadas.`);
+    if(exUseCatalog()) await sb.from('app_settings').upsert({key:'exam_catalog', value:JSON.stringify({...EX.catalog, origem:EX.fileName+' · '+EX.catSheet, salvo_em:today()})});
+    toast(`${N(v.total,0)} exames importados.`);
     EX.wb=null; EX.rows=[]; document.getElementById('ex-file').value=''; document.getElementById('ex-map').style.display='none';
     await loadAll();
   }catch(e){ alert('Erro ao importar: '+e.message+(/exam_volumes|relation|schema/i.test(e.message)?'\n\nRode antes a migração v7.2 (migracao_v7_2.sql) no Supabase.':'')); }
@@ -2277,30 +2714,68 @@ async function exDeleteBatch(batch){
   if(!confirm('Apagar todos os registros dessa importação?')) return;
   if(await dbAction(()=>must(sb.from('exam_volumes').delete().eq('batch_id',batch)),'Importação apagada.')) await loadAll();
 }
+function exBar(v,max,color){ const w=max>0?Math.max(2,Math.round(100*v/max)):0; return `<div class="cc-bar" style="width:110px;display:inline-block;vertical-align:middle"><span style="width:${w}%;${color?'background:'+color:''}"></span></div>`; }
 function renderExames(){
   const vols=S.examVols||[]; const box=document.getElementById('ex-result'); if(!box) return;
-  if(!vols.length){ box.innerHTML='<div class="empty"><div class="ei">🧪</div><h3>Nenhum dado de exames importado</h3><p>Importe a planilha do sistema do laboratório acima.</p></div>'; return; }
-  const ag=aggregateExams(vols), se=seasonality(ag);
-  const first=vols.reduce((a,v)=>a<v.start?a:v.start,'9999'), last=vols.reduce((a,v)=>a>v.end?a:v.end,'0000');
-  const tot={}; vols.forEach(v=>tot[v.exam]=(tot[v.exam]||0)+v.qty);
-  const top=Object.entries(tot).sort((a,b)=>b[1]-a[1]).slice(0,10);
-  const batches={}; vols.forEach(v=>{ const b=(batches[v.batch]=batches[v.batch]||{batch:v.batch,file:v.file,n:0,qty:0}); b.n++; b.qty+=v.qty; });
+  if(!vols.length){ box.innerHTML='<div class="empty"><div class="ei">🧪</div><h3>Nenhum dado de exames importado</h3><p>Importe a planilha de exames do Workvet acima.</p></div>'; return; }
+  const cat=examCatalog(); const A=examAnalytics(vols,cat);
+  const batches={}; vols.forEach(v=>{ const b=(batches[v.batch]=batches[v.batch]||{batch:v.batch,file:v.file,n:0,qty:0,first:v.start,last:v.end}); b.n++; b.qty+=v.qty; if(v.start<b.first) b.first=v.start; if(v.end>b.last) b.last=v.end; });
+  const cheios=A.months.filter(m=>!m.parcial);
+  const maxIdx=Math.max(...A.months.map(m=>m.idx||0),1);
+  const temFat=A.temCatalogo && A.months.some(m=>m.fat>0);
+  const fatTot=A.months.reduce((s,m)=>s+m.fat,0), semPreco=A.months.reduce((s,m)=>s+m.semPreco,0);
+  const ult=cheios[cheios.length-1]||null;
+  // dia da semana (só dados diários)
+  const dowTot=A.dow.reduce((s,x)=>s+x,0); const DIAS=['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
+  const ordemDow=[1,2,3,4,5,6,0];
+  // exames: maior e menor mês entre meses completos
+  const pico=e=>{ const l=cheios.map(m=>({ym:m.ym,q:(e.m[m.ym]||0)/(m.dias||1)})); if(!l.length) return null; l.sort((a,b)=>b.q-a.q); return {max:l[0],min:l[l.length-1]}; };
+  const mediaMes=e=>cheios.length?cheios.reduce((s,m)=>s+(e.m[m.ym]||0),0)/cheios.length:null;
+  const rec=cheios.slice(-2), ant=cheios.slice(0,-2);
+  const tendencia=g=>{ if(!rec.length||!ant.length) return null; const r=rec.reduce((s,m)=>s+(g.m[m.ym]||0)/m.dias,0)/rec.length, a=ant.reduce((s,m)=>s+(g.m[m.ym]||0)/m.dias,0)/ant.length; return a>0?r/a-1:null; };
+  const sinal=v=>v===null?'—':`<span style="color:${v>0.05?'var(--ok)':(v<-0.05?'var(--danger)':'var(--muted)')}">${v>=0?'+':''}${P(v)}</span>`;
   box.innerHTML=`
-    <div class="alert ${se.confiavel?'alert-info':'alert-warn'}"><span>${se.confiavel?'ℹ️':'⚠️'}</span><span>${se.confiavel
-      ?'Índice = exames do mês ÷ média mensal dos meses carregados.'
-      :`<strong>Apenas ${se.n} mês(es) de dados.</strong> O índice abaixo é só indicativo: sazonalidade confiável exige pelo menos 12 meses. O último mês pode estar incompleto.`}
-      Estes números <strong>ainda não alteram</strong> as sugestões de compra: falta a correspondência entre exames e insumos.</span></div>
-    <div class="panel"><div class="panel-hdr"><span class="panel-ttl">Exames por mês (${fmtDate(first)} a ${fmtDate(last)})</span></div><div class="tbl-wrap"><table>
-      <thead><tr><th>Mês</th><th style="text-align:right">Exames</th><th style="text-align:right">Var. vs mês anterior</th><th style="text-align:right">Índice (média = 1,00)</th></tr></thead><tbody>
-      ${se.rows.map(r=>`<tr><td>${monthLabel(r.ym)}</td><td style="text-align:right" class="mono fw6">${N(r.total,0)}</td><td style="text-align:right">${r.delta!==null?(r.delta>=0?'+':'')+P(r.delta):'—'}</td><td style="text-align:right" class="mono">${r.idx!==null?N(r.idx,2):'—'}</td></tr>`).join('')}
+    <div class="alert ${A.confiavel?'alert-info':'alert-warn'}"><span>${A.confiavel?'ℹ️':'⚠️'}</span><span>${A.confiavel
+      ?'Índice = exames por dia de atendimento do mês ÷ média dos meses completos.'
+      :`<strong>${A.nCheios} mês(es) completos de dados.</strong> O índice mensal é só indicativo: sazonalidade confiável pede pelo menos 12 meses, e o ideal são 2 anos para o mesmo mês aparecer duas vezes. ${A.mesesNuncaVistos.length?'Ainda sem nenhum dado de <strong>'+A.mesesNuncaVistos.join(', ')+'</strong>: para esses meses não existe índice.':''}`}
+      Os meses são comparados por <strong>dia de atendimento (seg. a sáb.)</strong>, porque fevereiro tem menos dias que julho. Estes números <strong>ainda não alteram</strong> as sugestões de compra.</span></div>
+    <div class="stats-grid">
+      <div class="stat-card c-primary"><div class="lbl">Exames importados</div><div class="val">${N(A.total,0)}</div><div class="sub">${fmtDate(A.first)} a ${fmtDate(A.last)}</div></div>
+      <div class="stat-card"><div class="lbl">Média por dia de atendimento</div><div class="val">${A.media?N(A.media,0):'—'}</div><div class="sub">${A.nCheios} mês(es) completos</div></div>
+      <div class="stat-card ${A.ritmo===null?'':(A.ritmo<-0.05?'c-danger':(A.ritmo>0.05?'c-ok':''))}"><div class="lbl">Ritmo dos últimos 2 meses</div><div class="val">${A.ritmo===null?'—':(A.ritmo>=0?'+':'')+P(A.ritmo)}</div><div class="sub">vs. média dos meses anteriores (por dia)</div></div>
+      <div class="stat-card"><div class="lbl">${temFat?'Faturamento a preço de tabela':'Último mês completo'}</div><div class="val">${temFat?R(fatTot):(ult?N(ult.total,0):'—')}</div><div class="sub">${temFat?(semPreco?N(semPreco,0)+' exames sem preço na tabela':'sem descontos nem convênios'):(ult?monthLabel(ult.ym):'')}</div></div>
+    </div>
+    <div class="panel"><div class="panel-hdr"><span class="panel-ttl">📅 Exames por mês</span></div><div class="tbl-wrap"><table>
+      <thead><tr><th>Mês</th><th style="text-align:right">Exames</th><th style="text-align:right">Dias de atendimento</th><th style="text-align:right">Exames/dia</th><th>Índice (média = 1,00)</th><th style="text-align:right">Var. vs mês anterior</th>${temFat?'<th style="text-align:right">Faturamento (tabela)</th>':''}</tr></thead><tbody>
+      ${A.months.map(m=>`<tr${m.parcial?' style="opacity:.6"':''}><td><strong>${monthLabel(m.ym)}</strong>${m.parcial?' <span class="badge b-gray">incompleto</span>':''}</td>
+        <td style="text-align:right" class="mono fw6">${N(m.total,0)}</td><td style="text-align:right" class="mono">${m.dias}</td>
+        <td style="text-align:right" class="mono">${m.porDia?N(m.porDia,1):'—'}</td>
+        <td>${m.idx!==null?exBar(m.idx,maxIdx,m.idx>=1?'var(--primary)':'#94A3B8')+' <span class="mono">'+N(m.idx,2)+'</span>':'—'}</td>
+        <td style="text-align:right">${sinal(m.delta)}</td>${temFat?`<td style="text-align:right" class="mono">${R(m.fat)}</td>`:''}</tr>`).join('')}
       </tbody></table></div></div>
-    <div class="panel"><div class="panel-hdr"><span class="panel-ttl">Exames mais frequentes (todo o período importado)</span></div><div class="tbl-wrap"><table>
-      <thead><tr><th>Exame</th><th style="text-align:right">Quantidade</th><th style="text-align:right">% do total</th></tr></thead><tbody>
-      ${top.map(([n,q])=>`<tr><td>${n}</td><td style="text-align:right" class="mono">${N(q,0)}</td><td style="text-align:right">${P(q/Object.values(tot).reduce((s,x)=>s+x,0))}</td></tr>`).join('')}
+    <div class="g2">
+      ${A.temCatalogo?`<div class="panel"><div class="panel-hdr"><span class="panel-ttl">🧬 Por grupo de exame</span></div><div class="tbl-wrap"><table>
+        <thead><tr><th>Grupo</th><th style="text-align:right">Exames</th><th style="text-align:right">% do total</th><th style="text-align:right" title="Por dia de atendimento, últimos 2 meses completos vs. anteriores">Tendência</th></tr></thead><tbody>
+        ${A.groups.map(g=>`<tr><td><strong>${g.g}</strong></td><td style="text-align:right" class="mono">${N(g.total,0)}</td><td style="text-align:right">${P(g.total/A.total)}</td><td style="text-align:right">${sinal(tendencia(g))}</td></tr>`).join('')}
+        </tbody></table></div></div>`:''}
+      <div class="panel"><div class="panel-hdr"><span class="panel-ttl">📆 Por dia da semana</span></div><div class="panel-body">
+        ${dowTot?ordemDow.map(d=>`<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px"><span style="width:34px;font-size:12px;font-weight:600">${DIAS[d]}</span>${exBar(A.dow[d],Math.max(...A.dow))}<span class="mono" style="font-size:12px">${P(A.dow[d]/dowTot)}</span></div>`).join('')
+          :'<p class="text-muted">Só aparece com dados diários (ficha do Workvet ou um dia por linha).</p>'}
+        <div class="conv-hint" style="margin-top:8px">Ajuda a escolher o dia da contagem semanal e a escala: o dia de menos movimento é o melhor para contar.</div></div></div>
+    </div>
+    <div class="panel"><div class="panel-hdr"><span class="panel-ttl">🔝 Exames mais frequentes</span></div><div class="tbl-wrap"><table>
+      <thead><tr><th>Exame</th><th style="text-align:right">Total</th><th style="text-align:right">% do total</th><th style="text-align:right">Média/mês</th><th style="text-align:right" title="Por dia de atendimento, entre meses completos">Mês mais forte</th><th style="text-align:right">Mês mais fraco</th><th style="text-align:right">Tendência</th></tr></thead><tbody>
+      ${A.exams.slice(0,15).map(e=>{ const pk=pico(e); return `<tr><td><strong>${e.exam}</strong>${e.name?`<div class="rp-tag">${e.name}</div>`:''}</td><td style="text-align:right" class="mono fw6">${N(e.total,0)}</td><td style="text-align:right">${P(e.total/A.total)}</td>
+        <td style="text-align:right" class="mono">${N(mediaMes(e),0)}</td><td style="text-align:right">${pk?monthLabel(pk.max.ym).split('/')[0]:'—'}</td><td style="text-align:right">${pk?monthLabel(pk.min.ym).split('/')[0]:'—'}</td><td style="text-align:right">${sinal(tendencia(e))}</td></tr>`; }).join('')}
       </tbody></table></div></div>
-    <div class="panel"><div class="panel-hdr"><span class="panel-ttl">Importações feitas</span></div><div class="tbl-wrap"><table>
-      <thead><tr><th>Arquivo</th><th style="text-align:right">Linhas</th><th style="text-align:right">Exames</th><th></th></tr></thead><tbody>
-      ${Object.values(batches).map(b=>`<tr><td>${b.file||'—'}</td><td style="text-align:right" class="mono">${b.n}</td><td style="text-align:right" class="mono">${N(b.qty,0)}</td><td><button class="btn btn-sm btn-outline" style="color:var(--danger)" onclick="exDeleteBatch('${b.batch}')">Apagar</button></td></tr>`).join('')}
+    <div class="panel"><div class="panel-hdr"><span class="panel-ttl">🛒 Como estes dados vão apoiar a compra</span></div><div class="panel-body" style="font-size:13px;line-height:1.6">
+      <p><strong>Hoje</strong> a sugestão de compra usa o consumo real das últimas 4 semanas (contagens). Ela já reage a um mês mais forte, mas com atraso de algumas semanas.</p>
+      <p style="margin-top:8px"><strong>Próximo passo</strong>: em cada insumo, preencher em Produtos as <strong>siglas do Workvet</strong> que usam aquele insumo. Com isso o sistema compara o consumo com os exames feitos (rendimento real, repetições e perdas) e passa a projetar o consumo das próximas semanas como: exames previstos × consumo por exame.</p>
+      <p style="margin-top:8px"><strong>Previsão de exames</strong>: dias de atendimento da semana × média recente por dia, ajustada pelo índice do mês <strong>só quando houver o mesmo mês em pelo menos um ano anterior</strong>. Até lá, o sistema usa ritmo recente e calendário (feriados e dias úteis), sem índice sazonal.</p>
+    </div></div>
+    <div class="panel"><div class="panel-hdr"><span class="panel-ttl">Importações feitas</span>${cat?`<span class="text-muted" style="font-size:12px">Tabela de exames: ${Object.keys(cat.items).length} siglas (${cat.origem||'importada'})</span>`:''}</div><div class="tbl-wrap"><table>
+      <thead><tr><th>Arquivo</th><th>Período</th><th style="text-align:right">Registros</th><th style="text-align:right">Exames</th><th></th></tr></thead><tbody>
+      ${Object.values(batches).map(b=>`<tr><td>${b.file||'—'}</td><td>${fmtDate(b.first)} a ${fmtDate(b.last)}</td><td style="text-align:right" class="mono">${b.n}</td><td style="text-align:right" class="mono">${N(b.qty,0)}</td><td><button class="btn btn-sm btn-outline" style="color:var(--danger)" onclick="exDeleteBatch('${b.batch}')">Apagar</button></td></tr>`).join('')}
       </tbody></table></div></div>`;
 }
 async function loadExams(){
@@ -2336,6 +2811,7 @@ function startRealtime(){
 }
 
 function renderAll(){
+  S._ver=(S._ver||0)+1;   // invalida caches de cálculo
   renderProducts(); renderSuppliers(); renderPeriods();
   renderCounts(); renderPurchases(); renderDashboard(); updateAlertBadge();
   renderCommitments(); updateCommitBadge(); renderLosses(); updateRepBadge();
@@ -2355,7 +2831,7 @@ const PT = {
   dashboard:'Dashboard',periodos:'Períodos',contagem:'Contagem de Estoque',
   compras:'Compras',perdas:'Perdas e Baixas',reposicao:'Reposição e Validade',
   planejamento:'Planejamento Semanal de Caixa',parcelamentos:'Caixa e Compras — Cronograma de Desembolso',cmv:'CMV — Custo das Mercadorias Vendidas',
-  exames:'Exames Realizados e Sazonalidade',produtos:'Produtos',fornecedores:'Fornecedores',unidades:'Unidades',alertas:'Alertas de Estoque'
+  exames:'Exames Realizados e Sazonalidade',guia:'Guia de Uso',produtos:'Produtos',fornecedores:'Fornecedores',unidades:'Unidades',alertas:'Alertas de Estoque'
 };
 function go(page){
   document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
@@ -2369,7 +2845,7 @@ function go(page){
     compras:'<button class="btn btn-primary" onclick="openNotaModal()">+ Registrar Nota de Compra</button>',
     perdas:'<button class="btn btn-primary" onclick="openLossModal()">+ Registrar Perda</button>',
     planejamento:'<button class="btn btn-primary" onclick="addPlanWeek()">+ Nova Semana</button>',
-    parcelamentos:'<button class="btn btn-primary" onclick="openCommitmentModal()">+ Nova Compra Parcelada</button>',
+    parcelamentos:'<button class="btn btn-outline" onclick="go(\'compras\')">Lançar compra em Compras →</button>',
     produtos:'<button class="btn btn-primary" onclick="openProductModal()">+ Novo Produto</button>',
     fornecedores:'<button class="btn btn-primary" onclick="openSupplierModal()">+ Novo Fornecedor</button>'
   };
@@ -2392,8 +2868,9 @@ function renderDashboard(){
   document.getElementById('d-estoque-sub').textContent = last ? 'Contagem em '+fmtDate(last.date) : 'Nenhuma contagem';
   // Último período ENCERRADO pela data de fim (antes: último criado) e sem a implantação
   // Último período COMPLETO (abertura + fechamento) pela data de fim — antes: último criado
-  const closed = S.periods.filter(p=>p.type!=='implantacao' && p.openCountId && p.closeCountId)
+  const closed = S.periods.filter(p=>p.type!=='implantacao' && p.openCountId && p.closeCountId && inCmvScope(p))
     .sort((a,b)=>periodRef(b).localeCompare(periodRef(a)));
+  if(!closed.length){ document.getElementById('d-cmv').textContent='—'; document.getElementById('d-cmv-sub').textContent='Análise de CMV a partir de '+fmtDate(cmvStart()); }
   if(closed.length>0){
     const d=calcCMVDetail(closed[0].id);
     document.getElementById('d-cmv').textContent = d.cmv!==null?R(d.cmv):'—';
@@ -2417,8 +2894,8 @@ function renderDashboard(){
     ? '<tr><td colspan="4"><div class="empty" style="padding:16px"><div class="ei">✅</div><p>Nenhum alerta</p></div></td></tr>'
     : alerts.slice(0,8).map(a=>`<tr>
         <td><strong>${a.p.name}</strong></td>
-        <td class="text-danger fw6">${a.qty} <span style="font-size:11px">${a.p.stockUnit}</span></td>
-        <td>${a.p.min} ${a.p.stockUnit}</td>
+        <td class="text-danger fw6">${N(a.qty,2)} <span style="font-size:11px">${a.p.stockUnit}</span></td>
+        <td>${N(a.min,2)} ${a.p.stockUnit}</td>
         <td>${a.sName}</td>
       </tr>`).join('');
   const pdiv=document.getElementById('d-periods');
@@ -2815,8 +3292,24 @@ async function toggleInstallmentPaid(id, checked){
 // ── Helpers ──
 function commitLabel(c){
   const sup = c.suppId ? S.suppliers.find(x => x.id === c.suppId) : null;
-  if(sup && c.desc) return `${sup.name} — ${c.desc}`;
-  return sup ? sup.name : (c.desc || 'Compra sem identificação');
+  const nf = (c.invoice && !(c.desc||'').includes(c.invoice)) ? `NF ${c.invoice} — ` : '';
+  const desc = nf + (c.desc||'');
+  if(sup && desc) return `${sup.name} — ${desc}`;
+  return sup ? sup.name : (desc || 'Compra sem identificação');
+}
+// Lançamentos antigos do caixa sem nota de estoque ligada (provável duplicidade com uma nota de Compras)
+function renderOrphans(){
+  const box=document.getElementById('cc-orphans'); if(!box) return;
+  const orf=orphanCommitments();
+  if(!orf.length){ box.innerHTML=''; return; }
+  const semCaixa=notaGroups().filter(n=>n.terms==='sem-caixa');
+  box.innerHTML=`<div class="panel"><div class="panel-hdr"><span class="panel-ttl">⚠️ ${orf.length} lançamento(s) no caixa sem nota de compra ligada</span></div>
+    <div class="panel-body" style="padding:12px 18px">
+      <div class="conv-hint" style="margin-bottom:8px">Foram lançados direto aqui, no modelo antigo. Se a mesma compra também está em Compras, ela está <strong>em dobro</strong>: ligue as notas (🔗) para o caixa reconhecer a nota, ou exclua o lançamento duplicado. ${semCaixa.length?`Há ${semCaixa.length} nota(s) em Compras ainda fora do caixa.`:''}</div>
+      <div class="tbl-wrap"><table><thead><tr><th>Fornecedor / Descrição</th><th>Data</th><th style="text-align:right">Valor</th><th style="text-align:center">Parcelas</th><th></th></tr></thead><tbody>
+      ${orf.map(c=>`<tr><td><strong>${commitLabel(c)}</strong></td><td>${fmtDate(c.date)}</td><td style="text-align:right" class="mono">${R(c.total)}</td><td style="text-align:center">${c.n}x</td>
+        <td style="white-space:nowrap"><button class="btn btn-sm btn-primary" onclick="openLinkModal(${c.id})">🔗 Ligar notas</button> <button class="btn btn-sm btn-outline" style="color:var(--danger)" onclick="deleteCommitment(${c.id})">Excluir</button></td></tr>`).join('')}
+      </tbody></table></div></div></div>`;
 }
 function openInstallments(){ return S.installments.filter(i => !i.paid); }
 function instInRange(from, to, onlyOpen){
@@ -2898,7 +3391,7 @@ function renderCommitments(){
         const atrasada = !i.paid && i.due < t;
         return `<tr>
           <td><input type="date" class="cc-in-date" id="cc-d-${i.id}" value="${i.due}" onchange="saveInstallment(${i.id})"></td>
-          <td>${c ? commitLabel(c) : '—'}</td>
+          <td>${c ? commitLabel(c) : '—'}${c && commitTerms(c)==='tbd' ? ' <span class="badge b-warn" title="Boleto ainda não saiu: data estimada">data a definir</span>' : ''}</td>
           <td class="text-muted">${i.seq}/${c ? c.n : '?'}</td>
           <td style="text-align:right"><input type="number" step="0.01" class="cc-in-amt" id="cc-v-${i.id}" value="${i.amount}" onchange="saveInstallment(${i.id})"></td>
           <td>${i.paid
@@ -2917,13 +3410,14 @@ function renderCommitments(){
   document.getElementById('cc-ft-aberto').textContent = R(anoTot - anoPago);
 
   // ── Lista de compras ──
+  renderOrphans();
   const lb = document.getElementById('cc-list-tbody');
   document.getElementById('cc-count').textContent = S.commits.length;
   if(!S.commits.length){
     lb.innerHTML = `<tr><td colspan="8"><div class="empty">
-      <div class="ei">💳</div><h3>Nenhuma compra parcelada</h3>
-      <p>Cadastre uma compra e o sistema monta o cronograma de parcelas.</p>
-      <button class="btn btn-primary" style="margin-top:14px" onclick="openCommitmentModal()">+ Nova Compra Parcelada</button>
+      <div class="ei">💳</div><h3>Nenhuma compra no caixa</h3>
+      <p>Registre a nota em Compras: o pagamento aparece aqui sozinho.</p>
+      <button class="btn btn-primary" style="margin-top:14px" onclick="go('compras')">Ir para Compras</button>
     </div></td></tr>`;
     return;
   }
@@ -2942,7 +3436,7 @@ function renderCommitments(){
       <td><strong>${commitLabel(c)}</strong>${c.notes ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">${c.notes}</div>` : ''}</td>
       <td>${fmtDate(c.date)}</td>
       <td style="text-align:right" class="mono fw6">${R(c.total)}</td>
-      <td style="text-align:center"><span class="badge b-indigo">${c.n}x</span></td>
+      <td style="text-align:center">${(()=>{const tm=commitTerms(c,list); return `<span class="badge ${TERMS_BADGE[tm]||'b-indigo'}">${tm==='parc'?c.n+'x':TERMS_LBL[tm]}</span>`;})()}</td>
       <td style="text-align:right" class="mono ${saldo > 0 ? 'fw7' : 'text-muted'}">${R(saldo)}</td>
       <td><div style="display:flex;align-items:center;gap:8px">
         <div class="cc-bar"><span style="width:${pct}%"></span></div>
@@ -3517,6 +4011,7 @@ async function deletePurchase(id){
 }
 
 function renderPurchases(){
+  renderNotas();
   const tb=document.getElementById('compras-tbody');
   if(!S.purchases.length){
     tb.innerHTML='<tr><td colspan="12"><div class="empty"><div class="ei">🛒</div><h3>Nenhuma compra</h3><p>Registre uma nota de compra.</p></div></td></tr>';return;
@@ -3530,7 +4025,8 @@ function renderPurchases(){
     const purchaseUnit = prod ? prod.purchaseUnit : 'un.';
     const stockUnit = prod ? prod.stockUnit : 'un.';
     const stockCostFromPurchase = cost_per_stock(c.cost, convFactor);
-    const expCls = c.expiry ? (c.expiry<t ? 'b-danger' : (c.expiry<=addDays(t,60) ? 'b-warn' : 'b-gray')) : '';
+    const expSt = c.expiry ? expiryStatus(prod, {entry:c.date, expiry:c.expiry, atRisk:0}, t) : null;  // aviso conforme o produto
+    const expCls = expSt ? EXP_BADGE[expSt] : '';
     return `<tr>
       <td>${fmtDate(c.date)}</td>
       <td>
@@ -3545,11 +4041,146 @@ function renderPurchases(){
       <td class="mono text-muted">${c.freight?R(c.freight):'—'}</td>
       <td class="mono fw6 text-primary">${R(c.total)}</td>
       <td>${c.expiry?`<span class="badge ${expCls}">${fmtDate(c.expiry)}</span>`:'<span class="text-muted">—</span>'}${c.lotCode?`<div class="rp-tag">Lote ${c.lotCode}</div>`:''}</td>
-      <td style="font-size:12px">${c.invoice||'—'}${c.commitmentId?'<div><span class="badge b-indigo">Parcelada</span></div>':'<div><span class="badge b-gray" title="Nota sem compra parcelada vinculada: à vista, ou boleto ainda a definir">Sem parcelas</span></div>'}</td>
+      <td style="font-size:12px">${c.invoice||'—'}${c.commitmentId?'<div><span class="badge b-indigo">No caixa</span></div>':(c.total>0?'<div><span class="badge b-danger" title="Nota sem pagamento no caixa: use Lançar no caixa no painel Notas e Pagamentos">Fora do caixa</span></div>':'')}</td>
       <td style="font-size:12px;color:var(--muted)">${per?per.label:'—'}</td>
       <td style="white-space:nowrap"><button class="btn btn-sm btn-outline" onclick="editPurchase(${c.id})">Editar</button> <button class="btn btn-sm btn-outline" style="color:var(--danger);margin-left:4px" onclick="deletePurchase(${c.id})">✕</button></td>
     </tr>`;
   }).join('');
+}
+
+// ─── NOTAS E PAGAMENTOS (aba Compras) ─────────────────────────
+// A nota é lançada uma vez em Compras e o pagamento dela aparece no caixa. Aqui a equipe vê e
+// ajusta as datas das parcelas para planejar os pagamentos.
+let notaFilter='';
+const TERMS_LBL={vista:'À vista',parc:'Parcelado',tbd:'A definir','sem-caixa':'Fora do caixa',bonificacao:'Bonificação'};
+const TERMS_BADGE={vista:'b-ok',parc:'b-indigo',tbd:'b-warn','sem-caixa':'b-danger',bonificacao:'b-gray'};
+function setNotaFilter(f,btn){ notaFilter=f; document.querySelectorAll('#np-filters .fpill').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); renderNotas(); }
+function suppName(id){ const s=S.suppliers.find(x=>x.id===id); return s?s.name:'Sem fornecedor'; }
+function renderNotas(){
+  const tb=document.getElementById('np-tbody'); if(!tb) return;
+  const all=notaGroups(), t=today();
+  const fora=all.filter(n=>n.terms==='sem-caixa'), tbd=all.filter(n=>n.terms==='tbd');
+  const abertas=all.flatMap(n=>n.inst.filter(i=>!i.paid));
+  const prox=abertas.filter(i=>i.due>=t && i.due<=addDays(t,30)), venc=abertas.filter(i=>i.due<t);
+  document.getElementById('np-cards').innerHTML=`
+    <div class="stat-card ${fora.length?'c-danger':'c-ok'}"><div class="lbl">Notas fora do caixa</div><div class="val">${fora.length}</div><div class="sub">${fora.length?R(fora.reduce((s,n)=>s+n.total,0))+' sem pagamento lançado':'Todas as notas estão no caixa'}</div></div>
+    <div class="stat-card ${tbd.length?'c-warn':''}"><div class="lbl">Boleto a definir</div><div class="val">${tbd.length}</div><div class="sub">${tbd.length?'Com data estimada: ajuste quando sair':'Nenhuma'}</div></div>
+    <div class="stat-card"><div class="lbl">A pagar em 30 dias</div><div class="val">${R(prox.reduce((s,i)=>s+i.amount,0))}</div><div class="sub">${prox.length} parcela(s)</div></div>
+    <div class="stat-card ${venc.length?'c-danger':'c-ok'}"><div class="lbl">Parcelas vencidas</div><div class="val">${venc.length}</div><div class="sub">${venc.length?R(venc.reduce((s,i)=>s+i.amount,0))+' em atraso':'Nenhuma em atraso'}</div></div>`;
+  let list=all;
+  if(notaFilter==='aberto') list=all.filter(n=>n.openAmt>0);
+  else if(notaFilter==='acao') list=all.filter(notaNeedsAction);
+  if(!list.length){ tb.innerHTML=`<tr><td colspan="7"><div class="empty"><div class="ei">🧾</div><h3>${all.length?'Nenhuma nota neste filtro':'Nenhuma nota registrada'}</h3></div></td></tr>`; return; }
+  tb.innerHTML=list.map(n=>{
+    const chips=n.inst.slice(0,6).map(i=>{
+      const cls=i.paid?'b-ok':(i.due<t?'b-danger':'b-warn');
+      return `<span class="badge ${cls}" style="margin:1px 2px" title="${i.paid?'Pago'+(i.paidDate?' em '+fmtDate(i.paidDate):''):(i.due<t?'Vencida':'A vencer')}">${i.seq}ª ${fmtDayMonth(i.due)} · ${R(i.amount)}</span>`;
+    }).join('')+(n.inst.length>6?` <span class="text-muted" style="font-size:11px">+${n.inst.length-6}</span>`:'');
+    const diff=(n.diff!==null && Math.abs(n.diff)>1)?`<div><span class="badge b-warn" title="Soma das parcelas diferente do total da nota">${n.diff>0?'+':'−'}${R(Math.abs(n.diff))} vs. nota</span></div>`:'';
+    const multi=n.commit && n.invoices.size>1?`<div class="rp-tag">boleto junta ${n.invoices.size} notas</div>`:'';
+    return `<tr>
+      <td>${fmtDate(n.date)}</td>
+      <td><strong>${suppName(n.suppId)}</strong><div class="rp-tag">NF ${n.invoice||'s/n'} · ${n.lines.length} item(ns)</div>${multi}</td>
+      <td style="text-align:right" class="mono fw6">${R(n.total)}</td>
+      <td><span class="badge ${TERMS_BADGE[n.terms]}">${TERMS_LBL[n.terms]}${n.terms==='parc'?' '+n.inst.length+'x':''}</span>${diff}</td>
+      <td style="max-width:340px">${n.inst.length?chips:(n.terms==='bonificacao'?'<span class="text-muted">—</span>':'<span class="text-muted" style="font-size:12px">Sem parcelas no caixa</span>')}</td>
+      <td style="text-align:right" class="mono ${n.openAmt>0?'fw7':'text-muted'}" ${n.overdue?'style="color:var(--danger)"':''}>${n.inst.length?R(n.openAmt):'—'}</td>
+      <td style="white-space:nowrap">${n.terms==='bonificacao'?'':`<button class="btn btn-sm ${n.terms==='sem-caixa'||n.terms==='tbd'?'btn-primary':'btn-outline'}" onclick="openPayModal('${n.key}')">${n.terms==='sem-caixa'?'Lançar no caixa':'Parcelas'}</button>`}
+        <button class="btn btn-sm btn-outline" style="color:var(--danger)" title="Excluir a nota inteira (itens e pagamento)" onclick="deleteNota('${n.key}')">✕</button></td>
+    </tr>`;
+  }).join('');
+}
+// ── Modal de parcelas ──
+let PAY=null;
+function openPayModal(key){
+  const n=notaGroups().find(x=>x.key===key); if(!n) return;
+  const rows=n.inst.map(i=>({due:i.due,amount:i.amount,paid:i.paid,paidDate:i.paidDate||null}));
+  if(!rows.length) rows.push({due:addDays(n.date,30),amount:n.total,paid:false,paidDate:null});
+  PAY={n,rows};
+  document.getElementById('pay-sub').textContent=`${suppName(n.suppId)} · NF ${n.invoice||'s/n'} · recebida em ${fmtDate(n.date)} · ${n.lines.length} item(ns)`;
+  document.getElementById('pay-terms').value=['vista','parc','tbd'].includes(n.terms)?n.terms:'parc';
+  document.getElementById('pay-invoice').value=n.invoice||'';
+  document.getElementById('pay-n').value=Math.max(1,rows.length);
+  document.getElementById('pay-first').value=rows[0].due;
+  document.getElementById('pay-interval').value='month';
+  document.getElementById('pay-total').textContent=R(n.total);
+  renderPayRows(); openM('m-pay');
+}
+function readPayRows(){
+  if(!PAY) return;
+  PAY.rows=PAY.rows.map((r,i)=>({...r, due:document.getElementById('pay-d-'+i)?.value||r.due,
+    amount:num(document.getElementById('pay-v-'+i)?.value), paid:!!document.getElementById('pay-p-'+i)?.checked}));
+}
+function renderPayRows(){
+  const n=PAY.rows.length, t=today();
+  document.getElementById('pay-tbody').innerHTML=PAY.rows.map((r,i)=>`<tr>
+    <td class="fw6">${i+1}/${n}</td>
+    <td><input type="date" class="cc-in-date" id="pay-d-${i}" value="${r.due}">${!r.paid && r.due<t?' <span class="badge b-danger">vencida</span>':''}</td>
+    <td style="text-align:right"><input type="number" step="0.01" class="cc-in-amt" id="pay-v-${i}" value="${r.amount}" oninput="sumPay()"></td>
+    <td style="text-align:center"><input type="checkbox" class="cc-chk" id="pay-p-${i}" ${r.paid?'checked':''}></td>
+    <td>${n>1?`<button class="btn btn-sm btn-outline" style="color:var(--danger)" onclick="removePayRow(${i})">✕</button>`:''}</td></tr>`).join('');
+  sumPay();
+}
+function sumPay(){
+  const s=r2(PAY.rows.reduce((a,_,i)=>a+num(document.getElementById('pay-v-'+i)?.value),0)), d=r2(s-PAY.n.total);
+  document.getElementById('pay-sum').textContent=R(s);
+  document.getElementById('pay-flag').innerHTML=Math.abs(d)<0.01?'<span class="badge b-ok">confere</span>':`<span class="badge b-warn">${d>0?'+':'−'}${R(Math.abs(d))}</span>`;
+}
+function addPayRow(){ readPayRows(); const last=PAY.rows[PAY.rows.length-1]; PAY.rows.push({due:last?addMonths(last.due,1):addDays(today(),30),amount:0,paid:false,paidDate:null}); renderPayRows(); }
+function removePayRow(i){ readPayRows(); PAY.rows.splice(i,1); renderPayRows(); }
+function regenPayInstallments(){
+  readPayRows();
+  if(PAY.rows.some(r=>r.paid) && !confirm('Há parcela marcada como paga. Gerar de novo substitui todas as parcelas (as pagas também). Continuar?')) return;
+  const parts=splitInstallments(PAY.n.total, document.getElementById('pay-n').value, document.getElementById('pay-first').value||addDays(PAY.n.date,30), document.getElementById('pay-interval').value);
+  PAY.rows=parts.map(x=>({due:x.due_date,amount:x.amount,paid:false,paidDate:null}));
+  renderPayRows();
+}
+function onPayTerms(){
+  const v=document.getElementById('pay-terms').value;
+  if(v==='vista' && PAY.rows.length===1){ readPayRows(); PAY.rows[0].paid=true; renderPayRows(); }
+}
+async function savePay(){
+  if(!inputsOk('#m-pay')) return;
+  readPayRows();
+  const n=PAY.n, terms=document.getElementById('pay-terms').value, invoice=document.getElementById('pay-invoice').value.trim()||null;
+  if(!PAY.rows.length){ alert('A nota precisa de pelo menos uma parcela.'); return; }
+  if(PAY.rows.some(r=>!r.due)){ alert('Informe o vencimento de todas as parcelas.'); return; }
+  if(PAY.rows.some(r=>r.amount<0)){ alert('Valor de parcela não pode ser negativo.'); return; }
+  const rows=[...PAY.rows].sort((a,b)=>a.due.localeCompare(b.due));
+  const total=r2(rows.reduce((s,r)=>s+r.amount,0));
+  if(total<=0){ alert('A soma das parcelas precisa ser maior que zero.'); return; }
+  const inst=cid=>rows.map((r,i)=>({commitment_id:cid, seq_no:i+1, due_date:r.due, amount:r.amount, paid:r.paid, paid_date:r.paid?(r.paidDate||(r.due<=today()?r.due:today())):null}));
+  const ok=await dbAction(async()=>{
+    let cid=n.commitId;
+    const nomes=[...new Set(n.lines.map(x=>(S.products.find(p=>p.id===x.prodId)||{}).name).filter(Boolean))];
+    const desc=(invoice?`NF ${invoice} — `:'')+nomes.slice(0,3).join(', ')+(nomes.length>3?` +${nomes.length-3}`:'');
+    if(!cid){
+      const {data}=await must(sb.from('commitments').insert(commitmentRow({suppId:n.suppId,desc,date:n.date,total,parts:rows,terms,invoice})).select().single());
+      cid=data.id;
+      await must(sb.from('purchases').update({commitment_id:cid}).in('id',n.ids));
+    } else {
+      const c=n.commit||{};
+      const upd={total_amount:total, installments:rows.length,
+        notes: terms==='tbd' ? 'Pagamento a definir (data estimada)' : (/a definir/i.test(c.notes||'')?null:(c.notes||null))};
+      if(invoice && !(c.desc||'').includes('NF ')) upd.description=desc;
+      if(S.has && S.has.commitV73){ upd.payment_terms=terms; upd.invoice_number=invoice; }
+      await mustRows(sb.from('commitments').update(upd).eq('id',cid).select('id'),'O pagamento da nota');
+      await must(sb.from('commitment_installments').delete().eq('commitment_id',cid));
+    }
+    await must(sb.from('commitment_installments').insert(inst(cid)));
+    // nº da nota informado aqui passa a valer também para os itens que estavam sem número
+    if(invoice) { const semNum=n.lines.filter(x=>!x.invoice).map(x=>x.id); if(semNum.length) await must(sb.from('purchases').update({invoice_number:invoice}).in('id',semNum)); }
+  },'Pagamento salvo.');
+  if(ok){ closeM('m-pay'); await loadAll(); }
+}
+async function deleteNota(key){
+  const n=notaGroups().find(x=>x.key===key); if(!n) return;
+  if(!confirm(`Excluir a nota inteira?\n\n${suppName(n.suppId)} · NF ${n.invoice||'s/n'} · ${n.lines.length} item(ns) · ${R(n.total)}\n\nSai do estoque/CMV`+(n.commit?' e do caixa (todas as parcelas).':'.'))) return;
+  const ok=await dbAction(async()=>{
+    await must(sb.from('purchases').delete().in('id',n.ids));
+    if(n.commitId){ await must(sb.from('commitment_installments').delete().eq('commitment_id',n.commitId)); await must(sb.from('commitments').delete().eq('id',n.commitId)); }
+  },'Nota excluída.');
+  if(ok) await loadAll();
 }
 
 // ─── NOTA DE COMPRA (vários itens) ────────────────────────────
@@ -3567,6 +4198,8 @@ function openNotaModal(){
   document.getElementById('nt-n').value=2;
   document.getElementById('nt-first').value=addDays(today(),30);
   document.getElementById('nt-interval').value='month';
+  document.getElementById('nt-paydate').value=today();
+  document.getElementById('nt-inst-tbody').innerHTML='';
   document.getElementById('nt-lines').innerHTML='';
   toggleNotaParc(); addNotaLine(); openM('m-nota');
 }
@@ -3605,9 +4238,42 @@ function notaLines(){
 }
 function toggleNotaParc(){
   const pay=document.getElementById('nt-pay').value;
-  document.getElementById('nt-parc-grp').style.display=pay==='parc'?'grid':'none';
+  document.getElementById('nt-vista-grp').style.display=pay==='vista'?'grid':'none';
+  document.getElementById('nt-parc-grp').style.display=(pay==='parc'||pay==='tbd')?'grid':'none';
+  document.getElementById('nt-n-grp').style.display=pay==='parc'?'block':'none';
+  document.getElementById('nt-int-grp').style.display=pay==='parc'?'block':'none';
+  document.getElementById('nt-first-lbl').textContent=pay==='tbd'?'Vencimento estimado':'1º Vencimento';
+  document.getElementById('nt-inst-box').style.display=pay==='parc'?'block':'none';
   document.getElementById('nt-tbd-note').style.display=pay==='tbd'?'flex':'none';
+  if(pay==='parc') buildNotaInstallments(true);
   calcNota();
+}
+function notaTotal(){
+  const lines=notaLines(); const freight=num(document.getElementById('nt-freight').value);
+  return r2(lines.filter(l=>l.prodId||l.qty).reduce((s,l)=>s+(l.isBonus?0:l.qty*l.cost),0)+freight);
+}
+// Monta as parcelas da nota com campos editáveis. resetDates=false preserva as datas já ajustadas
+// e só refaz os valores (quando muda o valor dos itens ou o frete).
+function buildNotaInstallments(resetDates){
+  const tb=document.getElementById('nt-inst-tbody'); if(!tb) return;
+  const total=notaTotal();
+  const n=Math.max(1,parseInt(document.getElementById('nt-n').value)||1);
+  const first=document.getElementById('nt-first').value||addDays(document.getElementById('nt-date').value||today(),30);
+  const parts=splitInstallments(total,n,first,document.getElementById('nt-interval').value);
+  const old=[...tb.querySelectorAll('input[type=date]')].map(i=>i.value);
+  const keep=!resetDates && old.length===n;
+  tb.innerHTML=parts.map((x,i)=>`<tr><td class="fw6">${x.seq_no}/${n}</td>
+    <td><input type="date" class="cc-in-date" id="nti-d-${i}" value="${keep&&old[i]?old[i]:x.due_date}"></td>
+    <td style="text-align:right"><input type="number" step="0.01" class="cc-in-amt" id="nti-v-${i}" value="${x.amount}" oninput="sumNotaInstallments()"></td></tr>`).join('');
+  sumNotaInstallments();
+}
+function notaInstallmentRows(){
+  return [...document.querySelectorAll('#nt-inst-tbody tr')].map((tr,i)=>({seq_no:i+1, due_date:document.getElementById('nti-d-'+i).value, amount:num(document.getElementById('nti-v-'+i).value)}));
+}
+function sumNotaInstallments(){
+  const s=r2(notaInstallmentRows().reduce((a,x)=>a+x.amount,0)), d=r2(s-notaTotal());
+  document.getElementById('nt-inst-sum').textContent=R(s);
+  document.getElementById('nt-inst-flag').innerHTML=Math.abs(d)<0.01?'<span class="badge b-ok">confere</span>':`<span class="badge b-warn">${d>0?'+':'−'}${R(Math.abs(d))} vs. nota</span>`;
 }
 function calcNota(){
   const lines=notaLines(); const freight=num(document.getElementById('nt-freight').value);
@@ -3617,11 +4283,21 @@ function calcNota(){
   document.getElementById('nt-sum-items').textContent=R(items);
   document.getElementById('nt-sum-freight').textContent=R(freight);
   document.getElementById('nt-sum-total').textContent=R(total);
-  const pv=document.getElementById('nt-parc-preview');
-  if(document.getElementById('nt-pay').value==='parc' && total>0){
-    const parts=splitInstallments(total, document.getElementById('nt-n').value, document.getElementById('nt-first').value||addDays(today(),30), document.getElementById('nt-interval').value);
-    pv.innerHTML='Parcelas: '+parts.map(x=>`${x.seq_no}ª ${fmtDate(x.due_date)} = ${R(x.amount)}`).join(' · ')+'. Datas e valores podem ser ajustados depois em Caixa e Compras.';
-  } else pv.textContent='';
+  if(document.getElementById('nt-pay').value==='parc') buildNotaInstallments(false);
+  document.getElementById('nt-parc-preview').textContent='';
+}
+// Grava o lançamento do caixa de uma nota (à vista, parcelado ou a definir). Usa as colunas da v7.3
+// quando existem; sem elas, "a definir" fica marcado nas observações.
+function commitmentRow(o){
+  const row={supplier_id:o.suppId||null, description:o.desc, purchase_date:o.date, total_amount:o.total, installments:o.parts.length,
+    notes: o.terms==='tbd' ? 'Pagamento a definir (data estimada)' : (o.notes||null)};
+  if(S.has && S.has.commitV73){ row.invoice_number=o.invoice||null; row.payment_terms=o.terms; }
+  return row;
+}
+function paymentParts(terms, total, date){
+  if(terms==='vista'){ const d=document.getElementById('nt-paydate').value||date; return [{seq_no:1,due_date:d,amount:total,paid:true,paid_date:d}]; }
+  if(terms==='tbd'){ return [{seq_no:1,due_date:document.getElementById('nt-first').value||addDays(date,30),amount:total,paid:false}]; }
+  return notaInstallmentRows().map(x=>({...x,paid:false}));
 }
 async function saveNota(){
   if(!inputsOk('#m-nota')) return;
@@ -3648,21 +4324,25 @@ async function saveNota(){
   if(!confirmClosedPeriod(notaPeriod)) return;
   const fr=allocateFreight(lines, freight);
   const total=r2(lines.reduce((s,l)=>s+(l.isBonus?0:l.qty*l.cost),0)+freight);
-  const parc=pay==='parc' && total>0;
+  const caixa=total>0;   // nota só de bonificação não tem pagamento
+  const parts=caixa?paymentParts(pay,total,date):[];
+  if(caixa){
+    if(parts.some(x=>!x.due_date)){ alert('Informe a data de todas as parcelas.'); return; }
+    if(pay==='parc'){ const s=r2(parts.reduce((a,x)=>a+x.amount,0)); if(Math.abs(s-total)>=0.01 && !confirm(`A soma das parcelas (${R(s)}) é diferente do total da nota (${R(total)}). Salvar assim mesmo? (ex.: juros ou desconto no boleto)`)) return; }
+  }
 
   setLoading(true);
   try{
     let commitmentId=null;
-    if(parc){
-      const n=Math.max(1,parseInt(document.getElementById('nt-n').value)||1);
+    if(caixa){
       const nomes=lines.map(l=>S.products.find(x=>x.id===l.prodId).name);
       const desc=(invoice?`NF ${invoice} — `:'')+nomes.slice(0,3).join(', ')+(nomes.length>3?` +${nomes.length-3}`:'');
-      const {data:cm,error:e1}=await sb.from('commitments').insert({supplier_id:suppId, description:desc, purchase_date:date, total_amount:total, installments:n, notes:null}).select().single();
+      const sumParts=r2(parts.reduce((a,x)=>a+x.amount,0));
+      const {data:cm,error:e1}=await sb.from('commitments').insert(commitmentRow({suppId,desc,date,total:sumParts,parts,terms:pay,invoice})).select().single();
       if(e1) throw e1;
       commitmentId=cm.id;
-      const parts=splitInstallments(total, n, document.getElementById('nt-first').value||addDays(date,30), document.getElementById('nt-interval').value);
       const {error:e2}=await sb.from('commitment_installments').insert(parts.map(x=>({...x, commitment_id:cm.id})));
-      if(e2) throw e2;
+      if(e2){ await sb.from('commitments').delete().eq('id',cm.id); throw e2; }
     }
     const rows=lines.map((l,i)=>({
       period_id:periodId, product_id:l.prodId, supplier_id:suppId, date, qty:l.qty,
@@ -3670,10 +4350,10 @@ async function saveNota(){
       is_bonus:l.isBonus, expiry_date:l.expiry, lot_code:l.lot, invoice_number:invoice, commitment_id:commitmentId
     }));
     const {error:e3}=await sb.from('purchases').insert(rows);
-    if(e3) throw e3;
+    if(e3){ if(commitmentId) await sb.from('commitments').delete().eq('id',commitmentId); throw e3; }  // não deixa lançamento solto no caixa
     for(const l of lines) if(!l.isBonus) await maybeUpdateProductCost(l.prodId, date, l.cost, null);
     closeM('m-nota');
-    toast(`Nota registrada: ${lines.length} item(ns)${parc?' · parcelamento criado':''}${pay==='tbd'?' · pagamento a definir':''}`);
+    toast(`Nota registrada: ${lines.length} item(ns)${caixa?' · no caixa ('+({vista:'à vista',parc:parts.length+'x',tbd:'data a definir'}[pay])+')':''}`);
     await loadAll();
   } catch(e){
     alert('Erro ao salvar a nota. Se for a primeira vez na v7, confirme se a migração "migracao_v7.sql" foi rodada no Supabase.\n\n'+e.message);
@@ -3799,8 +4479,9 @@ function refreshCMVSelect(){
   const list=[...S.periods].sort((a,b)=>(b.start||'').localeCompare(a.start||''));
   sel.innerHTML='<option value="">— Selecione —</option>'+list.map(p=>`<option value="${p.id}">${p.label} (${p.status==='aberto'?'Ativo':'Fechado'})</option>`).join('');
   if(cur && list.some(p=>String(p.id)===cur)) sel.value=cur;
-  else { const last=list.find(p=>p.type!=='implantacao' && p.openCountId && p.closeCountId); if(last) sel.value=last.id; }
+  else { const last=list.find(p=>p.type!=='implantacao' && p.openCountId && p.closeCountId && inCmvScope(p)) || list.find(p=>p.type!=='implantacao' && p.openCountId && p.closeCountId); if(last) sel.value=last.id; }
   const g=document.getElementById('cmv-goal'); if(g && document.activeElement!==g){ const v=cmvGoal(); g.value = v===null?'':r2(v*100); }
+  const cs=document.getElementById('cmv-start'); if(cs && document.activeElement!==cs) cs.value=cmvStart();
   renderMonthlyRevenue();
   renderCMVHistory();
 }
@@ -3817,7 +4498,7 @@ function renderCMV(){
     return;
   }
   const ms=monthSummary(periodRef(p).slice(0,7));
-  body.innerHTML=`
+  body.innerHTML=(inCmvScope(p)?'':`<div class="alert alert-warn"><span>🕒</span><span>Período anterior ao início da análise de CMV (${fmtDate(cmvStart())}). Os números ficam visíveis, mas não entram nos totais, médias nem no Dashboard.</span></div>`)+`
     <div class="alert ${p.status==='aberto'?'alert-warn':'alert-ok'}">${p.status==='aberto'?'⚠️ Período ativo — CMV parcial.':'✅ Período fechado — CMV definitivo.'}</div>
     <div class="cmv-grid">
       <div class="cmv-box"><div class="cl">📦 Estoque Inicial</div><div class="cv">${d.ei!==null?R(d.ei):'<span style="color:var(--warn)">Pendente</span>'}</div><div style="font-size:11px;color:var(--muted);margin-top:4px">${d.oc?fmtDate(d.oc.date)+(d.oc.periodId!==p.id?' 🔗 fechamento anterior':''):'—'}</div></div>
@@ -3859,6 +4540,14 @@ async function saveCMVGoal(){
   S.settings.cmv_goal_pct = v===''?null:String(num(v));
   toast('Meta de CMV % salva.'); renderMonthlyRevenue(); renderCMVHistory();
 }
+async function saveCMVStart(){
+  const v=document.getElementById('cmv-start').value;
+  if(v && !/^\d{4}-\d{2}-\d{2}$/.test(v)) return;
+  try{ await mustRows(sb.from('app_settings').upsert({key:'cmv_start', value:v||null}).select('key'), 'A data de início da análise'); }
+  catch(e){ alert('NÃO foi salvo.\n\n'+e.message); return; }
+  S.settings.cmv_start=v||null;
+  toast('Análise de CMV a partir de '+fmtDate(cmvStart())+'.'); renderMonthlyRevenue(); renderCMVHistory(); renderCMV(); renderDashboard();
+}
 function renderMonthlyRevenue(){
   const sel=document.getElementById('rev-year'); if(!sel) return;
   const cy=today().slice(0,4);
@@ -3871,10 +4560,10 @@ function renderMonthlyRevenue(){
   for(let m=1;m<=12;m++){
     const ym=`${chosen}-${String(m).padStart(2,'0')}`;
     const s=monthSummary(ym);
-    if(s.cmv!==null){ tc+=s.cmv; tpd+=s.perdas; if(s.rev) tr+=s.rev; }
+    if(s.cmv!==null && s.inScope){ tc+=s.cmv; tpd+=s.perdas; if(s.rev) tr+=s.rev; }
     const mr=s.mr;
-    rows.push(`<tr>
-      <td><strong>${MESES[m-1]}</strong>${s.overlap?' <span class="badge b-warn" title="Há período mensal e semanal no mesmo mês — o CMV pode estar contado em dobro">sobreposição</span>':''}</td>
+    rows.push(`<tr${s.inScope?'':' style="opacity:.45" title="Antes do início da análise de CMV: fora dos totais"'}>
+      <td><strong>${MESES[m-1]}</strong>${s.inScope?'':' <span class="badge b-gray">fora da análise</span>'}${s.overlap?' <span class="badge b-warn" title="Há período mensal e semanal no mesmo mês — o CMV pode estar contado em dobro">sobreposição</span>':''}</td>
       <td style="text-align:right"><input type="number" class="pp-in" step="0.01" min="0" id="rv-r-${ym}" value="${mr&&mr.revenueRaw!==null?mr.revenueRaw:''}" placeholder="${s.fonte==='semanal'?'Σ semanas: '+r2(s.rev):''}" onchange="saveMonthlyRevenue('${ym}')"></td>
       <td style="text-align:right"><input type="number" class="pp-in" step="0.01" min="0" id="rv-o-${ym}" value="${mr&&mr.outsourcedRaw!==null?mr.outsourcedRaw:''}" onchange="saveMonthlyRevenue('${ym}')"></td>
       <td style="text-align:center;font-size:12px">${s.nPeriods?`${s.nCompletos}/${s.nPeriods}`:'—'}${s.nPendentes?` <span class="badge b-warn" title="Períodos sem contagem de fechamento">${s.nPendentes} pend.</span>`:''}</td>
@@ -3884,7 +4573,7 @@ function renderMonthlyRevenue(){
       <td style="text-align:right">${s.pctInt!==null?P(s.pctInt):'<span class="text-muted">—</span>'}</td>
     </tr>`);
   }
-  rows.push(`<tr style="background:#F8FAFC"><td class="fw7">Total ${chosen}</td><td style="text-align:right" class="mono fw7">${tr?R(tr):'—'}</td><td></td><td></td><td style="text-align:right" class="mono fw7">${R(tc)}</td><td style="text-align:right" class="mono">${tpd?R(tpd):'—'}</td><td style="text-align:right">${tr?pctBadge(tc/tr):'—'}</td><td></td></tr>`);
+  rows.push(`<tr style="background:#F8FAFC"><td class="fw7">Total ${chosen}<div class="rp-tag">a partir de ${fmtDate(cmvStart())}</div></td><td style="text-align:right" class="mono fw7">${tr?R(tr):'—'}</td><td></td><td></td><td style="text-align:right" class="mono fw7">${R(tc)}</td><td style="text-align:right" class="mono">${tpd?R(tpd):'—'}</td><td style="text-align:right">${tr?pctBadge(tc/tr):'—'}</td><td></td></tr>`);
   tb.innerHTML=rows.join('');
 }
 async function saveMonthlyRevenue(ym){
@@ -3906,9 +4595,10 @@ async function saveMonthlyRevenue(ym){
 }
 function renderCMVHistory(){
   const tb=document.getElementById('cmv-hist');
-  const series=cmvSeries().filter(d=>d.completo).reverse();
-  if(!series.length){tb.innerHTML='<tr><td colspan="10"><div class="empty" style="padding:16px"><p>Nenhum período com abertura e fechamento</p></div></td></tr>';return;}
-  tb.innerHTML=series.map(d=>`<tr><td><strong>${d.p.label}</strong>${d.p.status==='aberto'?' <span class="badge b-warn">ativo</span>':''}</td><td><span class="badge b-primary">${d.p.typeLabel}</span></td>
+  const old=document.getElementById('cmv-show-old')?.checked;
+  const series=cmvSeries().filter(d=>d.completo && (old || d.inScope)).reverse();
+  if(!series.length){tb.innerHTML=`<tr><td colspan="10"><div class="empty" style="padding:16px"><p>Nenhum período completo a partir de ${fmtDate(cmvStart())}. Marque "Mostrar períodos antes do início" para ver os anteriores.</p></div></td></tr>`;return;}
+  tb.innerHTML=series.map(d=>`<tr${d.inScope?'':' style="opacity:.45"'}><td><strong>${d.p.label}</strong>${d.p.status==='aberto'?' <span class="badge b-warn">ativo</span>':''}${d.inScope?'':' <span class="badge b-gray">fora da análise</span>'}</td><td><span class="badge b-primary">${d.p.typeLabel}</span></td>
     <td class="mono">${R(d.ei)}</td><td class="mono">${R(d.compras)}</td><td class="mono">${R(d.ef)}</td><td class="mono fw7 text-primary">${R(d.cmv)}</td>
     <td class="mono text-muted">${d.perdas?R(d.perdas):'—'}</td><td class="mono">${d.revenue!==null?R(d.revenue):'<span class="text-muted">mensal</span>'}</td>
     <td>${pctBadge(d.pct)}</td><td>${d.rolling4!==null?P(d.rolling4):'<span class="text-muted">—</span>'}</td></tr>`).join('');
@@ -4013,7 +4703,7 @@ function renderProducts(){
       <td>${convCell}</td>
       <td>${convFactorCell}</td>
       <td>${costCell}</td>
-      <td>${p.min} <span style="font-size:11px;color:var(--muted)">${p.stockUnit}</span></td>
+      <td>${p.min===null?'<span class="text-muted" title="Sem estoque mínimo: não gera alerta de mínimo">—</span>':N(p.min,2)+` <span style="font-size:11px;color:var(--muted)">${p.stockUnit}</span>`}${p.sharedUse?'<div><span class="badge b-gray" style="font-size:10px">compartilhado</span></div>':''}</td>
       <td style="font-size:12px;color:var(--muted);max-width:150px">${snames||'—'}</td>
       <td>
         <button class="btn btn-sm btn-outline" onclick="editProduct(${p.id})">Editar</button>
@@ -4043,6 +4733,10 @@ function openProductModal(id){
     document.getElementById('prod-m-exp').checked=!!p.tracksExpiry;
     document.getElementById('prod-m-price').value=p.salePrice>0?p.salePrice:'';
     document.getElementById('prod-m-epu').value=p.examsPerUnit>0?p.examsPerUnit:'';
+    document.getElementById('prod-m-min').value=p.min===null?'':p.min;
+    document.getElementById('prod-m-shared').checked=!!p.sharedUse;
+    document.getElementById('prod-m-codes').value=p.examCodes||'';
+    document.getElementById('prod-m-expdays').value=p.expiryAlertDays===null?'':p.expiryAlertDays;
     Array.from(ss.options).forEach(o=>o.selected=p.supps.includes(parseInt(o.value)));
   } else {
     document.getElementById('prod-m-title').textContent='Novo Produto';
@@ -4058,11 +4752,29 @@ function openProductModal(id){
     document.getElementById('prod-m-lead').value=LEAD_TIME_PADRAO;
     document.getElementById('prod-m-exp').checked=false;
     document.getElementById('prod-m-price').value=''; document.getElementById('prod-m-epu').value='';
+    document.getElementById('prod-m-shared').checked=false;
+    document.getElementById('prod-m-codes').value='';
+    document.getElementById('prod-m-expdays').value='';
     Array.from(ss.options).forEach(o=>o.selected=false);
   }
   calcProdStockCost(); // Atualiza campos calculados
+  onProdShared(); onProdCodes();
   openM('m-product');
 }
+function onProdShared(){
+  const sh=document.getElementById('prod-m-shared').checked;
+  document.getElementById('prod-price-grp').style.display=sh?'none':'grid';
+  document.getElementById('prod-shared-hint').style.display=sh?'block':'none';
+  document.getElementById('prod-expdays-grp').style.visibility=document.getElementById('prod-m-exp').checked?'visible':'hidden';
+}
+// Mostra o nome e o preço de tabela das siglas digitadas (se a Tabela de Preços foi importada)
+function onProdCodes(){
+  const el=document.getElementById('prod-codes-hint'); const cat=examCatalog();
+  const codes=examCodesOf({examCodes:document.getElementById('prod-m-codes').value});
+  if(!codes.length || !cat){ el.textContent='Liga o insumo aos exames importados: compara o consumo com os exames realmente feitos.'; return; }
+  el.innerHTML=codes.map(c=>{ const s=cat.alias[c]||c, it=cat.items[s]; return it?`${c} = ${it.name}${it.price?' ('+R(it.price)+')':''}`:`<span style="color:var(--danger)">${c}: sigla não está na Tabela de Preços</span>`; }).join(' · ');
+}
+function examCatalog(){ try{ const c=S.settings&&S.settings.exam_catalog?JSON.parse(S.settings.exam_catalog):null; return (c&&c.items)?c:null; }catch(e){ return null; } }
 
 function editProduct(id){ openProductModal(id); }
 
@@ -4076,7 +4788,8 @@ async function saveProduct(){
   const conv=parseFloat(document.getElementById('prod-m-conv').value)||1;
   const pcost=parseFloat(document.getElementById('prod-m-pcost').value)||0;
   const scost=conv>0?pcost/conv:0; // custo por UNIDADE DE ESTOQUE
-  const min=parseFloat(document.getElementById('prod-m-min').value)||0;
+  const minV=document.getElementById('prod-m-min').value.trim();
+  const min=minV===''?null:(parseFloat(minV.replace(',','.'))||0);   // vazio = sem mínimo; 0 é válido
   const subLabel=document.getElementById('prod-m-subunit').value.trim();
   const subQty=parseFloat(document.getElementById('prod-m-subqty').value)||null;
   const supps=Array.from(document.getElementById('prod-m-supps').selectedOptions).map(o=>parseInt(o.value));
@@ -4110,6 +4823,12 @@ async function saveProduct(){
       productData.sale_price = priceV===''?null:num(priceV);
       productData.exams_per_unit = epuV===''?null:num(epuV);
     }
+    if(S.has && S.has.prodV73){
+      const ed=document.getElementById('prod-m-expdays').value.trim();
+      productData.expiry_alert_days = ed===''?null:Math.max(0,parseInt(ed)||0);
+      productData.shared_use = document.getElementById('prod-m-shared').checked;
+      productData.exam_codes = examCodesOf({examCodes:document.getElementById('prod-m-codes').value}).join(', ')||null;
+    } else if(min===null){ productData.min_stock = 0; }  // sem a migração v7.3 o banco pode não aceitar vazio
     if(id){
       await mustRows(sb.from('products').update(productData).eq('id',prodId).select('id'), 'O produto');
     } else {
@@ -4200,14 +4919,19 @@ async function deleteUnit(id){
 }
 
 // ─── ALERTS ───────────────────────────────────────────────────
+// Alerta de mínimo pelo estoque ESPERADO (última contagem + compras − perdas, sem lote vencido),
+// respeitando o mínimo de cada produto. Mínimo 0 é válido: alerta quando o item zera.
+// Produto sem mínimo cadastrado não entra.
+let _lowCache=null;
 function getLowAlerts(){
-  const last=S.counts.length?S.counts[0]:null; if(!last) return [];
-  return S.products.filter(p=>p.active&&p.min>0).map(p=>{
-    const item=last.items.find(i=>i.pid===p.id); const qty=item?item.total:0;
-    if(qty>p.min) return null;
-    const supp=p.supps.length?S.suppliers.find(s=>s.id===p.supps[0]):null;
-    return {p,qty,sName:supp?supp.name:'—',sPhone:supp?.phone||'—'};
-  }).filter(Boolean);
+  if(!S.counts.length) return [];
+  if(_lowCache && _lowCache.k===S._ver) return _lowCache.v;
+  let rows=[]; try{ rows=buildReplenishment().rows; }catch(e){ console.warn(e); }
+  const v=rows.filter(r=>r.p.active!==false && r.minSet && r.res.lastCount && r.abaixo).map(r=>{
+    const p=r.p, supp=p.supps.length?S.suppliers.find(s=>s.id===p.supps[0]):null;
+    return {p,qty:r2(r.usable*1000)/1000,min:r.minQ,r,sName:supp?supp.name:'—',sPhone:supp?.phone||'—'};
+  });
+  _lowCache={k:S._ver,v}; return v;
 }
 function updateAlertBadge(){
   const n=getLowAlerts().length;
@@ -4222,15 +4946,15 @@ function renderAlerts(){
   }
   const ccol={Diversas:'b-gray',Bioquímicos:'b-primary','Teste Rápido':'b-ok',Reagentes:'b-warn'};
   tb.innerHTML=alerts.map(a=>{
-    const deficit=a.p.min-a.qty;
-    const custoReposicao=deficit*a.p.cost;
+    const deficit=Math.max(0,a.min-a.qty);
+    const sug=a.r.sugUnits>0?a.r.sugCost:deficit*a.p.cost;
     return `<tr>
       <td><strong>${a.p.name}</strong></td>
       <td><span class="badge ${ccol[a.p.cat]||'b-gray'}" style="font-size:10px">${a.p.cat}</span></td>
-      <td><strong class="text-danger">${a.qty}</strong> <span class="uom-pill">${a.p.stockUnit}</span></td>
-      <td>${a.p.min} <span class="uom-pill">${a.p.stockUnit}</span></td>
-      <td><span class="badge b-danger">−${deficit}</span></td>
-      <td class="mono fw6">${R(custoReposicao)}</td>
+      <td><strong class="text-danger">${N(a.qty,2)}</strong> <span class="uom-pill">${a.p.stockUnit}</span></td>
+      <td>${N(a.min,2)} <span class="uom-pill">${a.p.stockUnit}</span></td>
+      <td>${a.min===0?'<span class="badge b-danger">Zerado</span>':`<span class="badge b-danger">−${N(deficit,2)}</span>`}</td>
+      <td class="mono fw6">${R(sug)}${a.r.sugUnits>0?`<div class="rp-tag">${a.r.sugUnits} ${a.p.purchaseUnit} (sugestão)</div>`:''}</td>
       <td>${a.sName}</td>
       <td>${a.sPhone}</td>
     </tr>`;
@@ -4265,9 +4989,23 @@ function renderReposicao(){
 
   // Semanas
   const weeks=replenishmentWeeks(8,rep);
+  document.getElementById('rp-wk-c6').textContent=SHOW_PLAN?'Saldo do Plano':'Saída Prevista';
+  document.getElementById('rp-wk-c7').textContent=SHOW_PLAN?'Situação':'Acumulado';
+  let acum=0;
   document.getElementById('rp-weeks-tbody').innerHTML=weeks.map((w,k)=>{
     const itens=w.sug.map(r=>`${r.p.name} (${r.sugUnits} ${r.p.purchaseUnit})`).join(', ');
     let sit;
+    if(!SHOW_PLAN){
+      const saida=w.parcTot+w.sugTot; acum+=saida;
+      return `<tr class="${k===0?'pp-now':''}">
+      <td><div class="pp-week-lbl">${weekLabel(w.ws)}</div>${k===0?'<div class="pp-week-sub">Semana atual (inclui atrasados)</div>':''}</td>
+      <td style="text-align:right" class="mono ${w.parcTot?'fw6':'text-muted'}" title="${w.parc.map(i=>{const c=S.commits.find(x=>x.id===i.commitId);return (c?commitLabel(c):'')+' '+fmtDate(i.due)+' '+R(i.amount);}).join('\n')}">${R(w.parcTot)}</td>
+      <td style="text-align:right" class="mono ${w.sugTot?'fw6 text-primary':'text-muted'}">${R(w.sugTot)}</td>
+      <td style="font-size:12px;max-width:280px">${itens||'<span class="text-muted">—</span>'}</td>
+      <td style="text-align:right" class="mono ${w.vencTot?'text-danger fw6':'text-muted'}" title="${w.venc.map(v=>v.r.p.name+' — '+N(v.l.atRisk,2)+' '+v.r.p.stockUnit+' vence '+fmtDate(v.l.expiry)).join('\n')}">${R(w.vencTot)}</td>
+      <td style="text-align:right" class="mono fw6" title="Parcelas + reposição sugerida">${R(saida)}</td>
+      <td style="text-align:right" class="mono text-muted">${R(acum)}</td></tr>`;
+    }
     if(w.aperto===true) sit='<span class="badge b-danger" title="Parcelas + reposição maiores que o saldo final projetado">Caixa não fecha</span>';
     else if(w.aperto===false) sit='<span class="badge b-ok">Cabe no caixa</span>';
     else sit='<span class="badge b-gray" title="Semana não cadastrada no Planejamento Semanal">Sem plano</span>';
@@ -4291,16 +5029,21 @@ function renderReposicao(){
   if(!list.length){ tb.innerHTML=`<tr><td colspan="11"><div class="empty"><div class="ei">✅</div><h3>${repFilter==='acao'?'Nenhum item precisa de ação agora':'Nenhum produto'}</h3><p>Use os filtros acima para ver todos.</p></div></td></tr>`; return; }
   tb.innerHTML=list.map(r=>{
     const su=r.p.stockUnit;
-    const expCls=r.nearestExpiry?(r.nearestExpiry<t?'b-danger':(r.nearestExpiry<=addDays(t,60)?'b-warn':'b-gray')):'';
+    const expSt=r.nearestLot?expiryStatus(r.p,r.nearestLot,t):null;
+    const expCls=expSt?EXP_BADGE[expSt]:'';
+    const aviso=r.nearestLot?expiryAlertDays(r.p,r.nearestLot):null;
+    const parado=r.res.stock-r.usable;
+    const stLbl=(r.status==='abaixo-minimo' && r.minQ===0)?'Zerado (mínimo 0)':STATUS_LABEL[r.status];
     return `<tr>
       <td><strong>${r.p.name}</strong><div class="rp-tag">${r.p.cat} · prazo ${r.lead}d</div></td>
-      <td style="text-align:right" class="mono">${N(r.res.stock,2)} <span class="text-muted" style="font-size:11px">${su}</span></td>
+      <td style="text-align:right" class="mono">${N(r.usable,2)} <span class="text-muted" style="font-size:11px">${su}</span>
+        <div class="rp-tag">${r.minSet?'mínimo '+N(r.minQ,2):'sem mínimo cadastrado'}</div>${parado>EPS?`<div class="rp-tag" style="color:var(--danger)" title="Vencido ou vai vencer antes de ser usado: não conta para a reposição">+${N(parado,2)} sem uso</div>`:''}</td>
       <td style="text-align:right" class="mono">${r.weekly!==null?N(r.weekly,2):'—'}</td>
       <td style="text-align:right" class="mono">${r.coverage!==null?N(r.coverage,0)+' d':'—'}</td>
-      <td>${r.ruptura?fmtDate(r.ruptura):'—'}</td>
-      <td>${r.pedirAte?`<strong>${fmtDate(r.pedirAte)}</strong>`:'—'}<div><span class="badge ${ST_BADGE[r.status]}">${STATUS_LABEL[r.status]}</span></div></td>
-      <td>${r.sugUnits!==null?`${r.sugUnits} ${r.p.purchaseUnit}<div class="rp-tag">${R(r.sugCost)}</div>`:'—'}</td>
-      <td>${r.nearestExpiry?`<span class="badge ${expCls}">${fmtDate(r.nearestExpiry)}</span>`:(r.p.tracksExpiry?'<span class="badge b-warn" title="Produto controla validade mas nenhum lote em estoque tem data">sem data</span>':'<span class="text-muted">—</span>')}</td>
+      <td>${r.ruptura?fmtDate(r.ruptura):'—'}${r.atingeMinimo && r.minQ>0?`<div class="rp-tag">mínimo em ${fmtDate(r.atingeMinimo)}</div>`:''}</td>
+      <td>${r.pedirAte?`<strong>${fmtDate(r.pedirAte)}</strong>`:'—'}<div><span class="badge ${ST_BADGE[r.status]}">${stLbl}</span></div></td>
+      <td>${r.sugUnits>0?`${r.sugUnits} ${r.p.purchaseUnit}<div class="rp-tag">${R(r.sugCost)}</div>`:'—'}</td>
+      <td>${r.nearestExpiry?`<span class="badge ${expCls}" title="${EXP_LABEL[expSt]} · aviso ${aviso.days} dias antes (${aviso.fonte})">${fmtDate(r.nearestExpiry)}</span>`:(r.p.tracksExpiry?'<span class="badge b-warn" title="Produto controla validade mas nenhum lote em estoque tem data">sem data</span>':'<span class="text-muted" title="Produto sem controle de validade">não tem</span>')}</td>
       <td style="text-align:right" class="mono ${r.riskVal>0?'text-danger fw6':'text-muted'}">${r.riskVal>0?R(r.riskVal)+`<div class="rp-tag">${N(r.riskQty,2)} ${su}</div>`:'—'}</td>
       <td style="text-align:right" class="mono" ${r.avgDaysAll!==null?`title="Histórico completo: ${N(r.avgDaysAll,0)} dias"`:''}>${r.avgDays!==null?N(r.avgDays,0)+' d':'—'}</td>
       <td><button class="btn btn-sm btn-outline" onclick="showLots(${r.p.id})">Lotes</button></td>
@@ -4328,17 +5071,20 @@ function showLots(pid){
 // Painel de validade na aba Alertas
 function renderExpiryAlerts(){
   const tb=document.getElementById('exp-tbody'); if(!tb) return;
-  const t=today(), lim=addDays(t,60);
+  const t=today();
   const rows=[];
+  // Cada lote é avaliado no prazo de aviso do próprio produto (não há prazo único)
   buildReplenishment().rows.forEach(r=>r.res.lots.forEach(l=>{
-    if(l.remaining>EPS && l.expiry && l.expiry<=lim) rows.push({r,l});
+    if(l.remaining<=EPS || !l.expiry) return;
+    const st=expiryStatus(r.p,l,t);
+    if(st && st!=='ok') rows.push({r,l,st,av:expiryAlertDays(r.p,l)});
   }));
   rows.sort((a,b)=>a.l.expiry.localeCompare(b.l.expiry));
-  if(!rows.length){ tb.innerHTML='<tr><td colspan="7"><div class="empty"><div class="ei">✅</div><h3>Nada vencendo nos próximos 60 dias</h3></div></td></tr>'; return; }
-  tb.innerHTML=rows.map(({r,l})=>{
+  if(!rows.length){ tb.innerHTML='<tr><td colspan="7"><div class="empty"><div class="ei">✅</div><h3>Nenhum lote vencido, em risco ou dentro do prazo de aviso</h3></div></td></tr>'; return; }
+  tb.innerHTML=rows.map(({r,l,st,av})=>{
     const venc=l.expiry<t;
-    return `<tr><td><strong>${r.p.name}</strong></td><td>${l.lotCode?'Lote '+l.lotCode:l.src}<div class="rp-tag">entrada ${fmtDate(l.entry)}</div></td>
-      <td><span class="badge ${venc?'b-danger':'b-warn'}">${fmtDate(l.expiry)}</span><div class="rp-tag">${venc?'vencido há '+daysBetween(l.expiry,t):'em '+daysBetween(t,l.expiry)} dias</div></td>
+    return `<tr><td><strong>${r.p.name}</strong><div class="rp-tag">aviso ${av.days} dias antes (${av.fonte})</div></td><td>${l.lotCode?'Lote '+l.lotCode:l.src}<div class="rp-tag">entrada ${fmtDate(l.entry)}</div></td>
+      <td><span class="badge ${EXP_BADGE[st]}">${fmtDate(l.expiry)}</span><div class="rp-tag">${venc?'vencido há '+daysBetween(l.expiry,t):'em '+daysBetween(t,l.expiry)} dias</div></td>
       <td style="text-align:right" class="mono">${N(l.remaining,2)} ${r.p.stockUnit}</td>
       <td style="text-align:right" class="mono ${l.atRisk>0?'text-danger fw6':''}">${l.atRisk>0?N(l.atRisk,2)+' '+r.p.stockUnit:'0 — usa antes'}</td>
       <td style="text-align:right" class="mono">${R((l.atRisk||0)*r.p.cost)}</td>
@@ -4602,6 +5348,7 @@ async function saveQuickEdit(){
 }
 
 // ─── INIT ─────────────────────────────────────────────────────
+if(SHOW_PLAN) document.getElementById('nav-planejamento').style.display='';
 loadAll().then(startRealtime);
 </script>
 </body>
