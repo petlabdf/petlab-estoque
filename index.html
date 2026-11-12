@@ -454,6 +454,7 @@ const SUPABASE_KEY = 'sb_publishable_lNbwJQG-2tRqoGAviCYdPA_qiki7EFe';
     <div class="topbar-actions"><div id="page-actions" style="display:flex;gap:8px"></div><button class="btn btn-outline" onclick="openExportModal()" title="Extrair dados do sistema em Excel ou JSON">⬇ Exportar Dados</button></div>
   </header>
   <div class="content">
+    <div class="alert alert-warn" id="db-warn" style="display:none"><span>⚠️</span><span></span></div>
 
     <!-- DASHBOARD -->
     <section class="section active" id="section-dashboard">
@@ -1971,16 +1972,27 @@ function toast(msg, type='ok'){
 
 // ─── DATA LOADING ─────────────────────────────────────────────
 // S.raw guarda as linhas exatamente como vêm do Supabase — usado na exportação JSON
+const TBL_NOME={units:'Unidades',purchase_plan:'Planejamento Semanal',stock_losses:'Perdas',exam_volumes:'Exames Realizados',monthly_revenue:'Faturamento Mensal',app_settings:'Configurações (meta de CMV)',commitments:'Caixa e Compras'};
+function loadWarn(t,error){ (S.loadWarn=S.loadWarn||[]).push({t,msg:(error&&error.message)||String(error)}); }
+function renderLoadWarn(){
+  const el=document.getElementById('db-warn'); if(!el) return;
+  const w=S.loadWarn||[];
+  el.style.display=w.length?'flex':'none';
+  if(w.length) el.querySelector('span:last-child').innerHTML='<strong>Parte dos dados não pôde ser lida do banco</strong>, por isso pode parecer que algo não foi salvo: '
+    +w.map(x=>`${TBL_NOME[x.t]||x.t} (${x.msg})`).join('; ')+'. Rode as migrações no Supabase (migracao_v7.sql e migracao_v7_2.sql) e recarregue a página.';
+}
 async function loadAll(){
   setLoading(true);
+  S.loadWarn=[];
   try {
     await Promise.all([loadSuppliers(), loadProducts(), loadPeriods(), loadCounts(), loadPurchases(), loadUnits(), loadPlan(), loadCommitments(), loadLosses(), loadRevenue(), loadSettings(), loadExams()]);
     // Regra P1: cada período abre com o fechamento do anterior (só preenche aberturas vazias)
     const links = computeChainLinks();
     if(links.length){
-      await Promise.all(links.map(l => sb.from('periods').update({open_count_id:l.countId}).eq('id', l.periodId)));
+      const rs=await Promise.all(links.map(l => sb.from('periods').update({open_count_id:l.countId}).eq('id', l.periodId)));
+      const bad=rs.find(r=>r && r.error); if(bad) loadWarn('periods',{message:'abertura automática das semanas não gravou: '+bad.error.message});
     }
-    renderAll();
+    renderAll(); renderLoadWarn();
   } catch(e) {
     console.error(e);
     toast('Erro ao carregar dados: ' + e.message, 'err');
@@ -2037,7 +2049,7 @@ async function loadProducts(){
 
 async function loadUnits(){
   const {data,error} = await sb.from('units').select('*').order('name');
-  if(error){ S.units=[]; S.raw.units=[]; return; } // tabela pode não existir ainda — não quebra o sistema
+  if(error){ loadWarn('units',error); S.units=[]; S.raw.units=[]; return; } // tabela pode não existir ainda — não quebra o sistema
   S.units = data; S.raw.units = data;
   renderUnitsDatalist();
 }
@@ -2066,7 +2078,8 @@ async function loadPeriods(){
     ...p, start:p.start_date, end:p.end_date, typeLabel:p.type_label,
     openCountId:p.open_count_id, closeCountId:p.close_count_id,
     revenue:(p.revenue===null||p.revenue===undefined)?null:parseFloat(p.revenue),
-    outsourced:parseFloat(p.outsourced_revenue)||0
+    outsourced:parseFloat(p.outsourced_revenue)||0,
+    outsourcedRaw:(p.outsourced_revenue===null||p.outsourced_revenue===undefined)?null:parseFloat(p.outsourced_revenue)
   }));
 }
 
@@ -2100,7 +2113,7 @@ async function loadPurchases(){
 // Planejamento semanal de compras — tabela purchase_plan
 async function loadPlan(){
   const {data,error} = await sb.from('purchase_plan').select('*').order('week_start',{ascending:true});
-  if(error){ S.plan=[]; S.raw.purchase_plan=[]; return; } // tabela pode não existir ainda — não quebra o sistema
+  if(error){ loadWarn('purchase_plan',error); S.plan=[]; S.raw.purchase_plan=[]; return; } // tabela pode não existir ainda — não quebra o sistema
   S.raw.purchase_plan = data;
   S.plan = data.map(w => ({
     id: w.id,
@@ -2120,7 +2133,7 @@ async function loadCommitments(){
     sb.from('commitments').select('*').order('purchase_date',{ascending:false}),
     sb.from('commitment_installments').select('*').order('due_date',{ascending:true})
   ]);
-  if(c.error || i.error){ S.commits=[]; S.installments=[]; S.raw.commitments=[]; S.raw.commitment_installments=[]; return; } // tabelas podem não existir ainda
+  if(c.error || i.error){ loadWarn('commitments',c.error||i.error); S.commits=[]; S.installments=[]; S.raw.commitments=[]; S.raw.commitment_installments=[]; return; } // tabelas podem não existir ainda
   S.raw.commitments = c.data; S.raw.commitment_installments = i.data;
   S.commits = c.data.map(x=>({
     id:x.id, suppId:x.supplier_id, desc:x.description||'',
@@ -2137,7 +2150,7 @@ async function loadCommitments(){
 // v7 — perdas, faturamento mensal e configurações (tabelas podem não existir antes da migração)
 async function loadLosses(){
   const {data,error} = await sb.from('stock_losses').select('*').order('date',{ascending:false});
-  if(error){ S.losses=[]; S.raw.stock_losses=[]; return; }
+  if(error){ loadWarn('stock_losses',error); S.losses=[]; S.raw.stock_losses=[]; return; }
   S.raw.stock_losses = data;
   S.losses = data.map(l=>({id:l.id, periodId:l.period_id, prodId:l.product_id, date:l.date,
     qty:parseFloat(l.qty)||0, reason:l.reason||'Outro', snap:parseFloat(l.cost_snapshot)||0, notes:l.notes||''}));
@@ -2253,7 +2266,7 @@ async function exImport(){
     // guarda o mapeamento (pelos títulos das colunas) só para facilitar a próxima importação
     const h=Math.max(1,parseInt(document.getElementById('ex-hdr').value)||1), head=(EX.rows[h-1]||[]).map(x=>String(x??'').trim()), m=exReadMap(), mm={};
     EX_COLS.forEach(c=>{ if(m[c]!==null) mm[c]=head[m[c]]; });
-    await sb.from('app_settings').upsert({key:'exam_map', value:JSON.stringify({map:mm,gran})});
+    await sb.from('app_settings').upsert({key:'exam_map', value:JSON.stringify({map:mm,gran})}); // só conveniência: falha aqui não afeta os dados
     toast(`${recs.length} linhas importadas.`);
     EX.wb=null; EX.rows=[]; document.getElementById('ex-file').value=''; document.getElementById('ex-map').style.display='none';
     await loadAll();
@@ -2262,7 +2275,7 @@ async function exImport(){
 }
 async function exDeleteBatch(batch){
   if(!confirm('Apagar todos os registros dessa importação?')) return;
-  setLoading(true); await sb.from('exam_volumes').delete().eq('batch_id',batch); toast('Importação apagada.'); await loadAll(); setLoading(false);
+  if(await dbAction(()=>must(sb.from('exam_volumes').delete().eq('batch_id',batch)),'Importação apagada.')) await loadAll();
 }
 function renderExames(){
   const vols=S.examVols||[]; const box=document.getElementById('ex-result'); if(!box) return;
@@ -2292,19 +2305,20 @@ function renderExames(){
 }
 async function loadExams(){
   const {data,error} = await sb.from('exam_volumes').select('*').order('period_start');
-  if(error){ S.examVols=[]; S.raw.exam_volumes=[]; return; } // tabela pode não existir ainda
+  if(error){ loadWarn('exam_volumes',error); S.examVols=[]; S.raw.exam_volumes=[]; return; } // tabela pode não existir ainda
   S.raw.exam_volumes = data;
   S.examVols = data.map(x=>({id:x.id,start:x.period_start,end:x.period_end,exam:x.exam_name,qty:parseFloat(x.qty)||0,batch:x.batch_id||'',file:x.source_file||''}));
 }
 async function loadRevenue(){
   const {data,error} = await sb.from('monthly_revenue').select('*').order('month');
-  if(error){ S.monthlyRevenue=[]; S.raw.monthly_revenue=[]; return; }
+  if(error){ loadWarn('monthly_revenue',error); S.monthlyRevenue=[]; S.raw.monthly_revenue=[]; return; }
   S.raw.monthly_revenue = data;
-  S.monthlyRevenue = data.map(m=>({id:m.id, month:m.month, revenue:parseFloat(m.revenue)||0, outsourced:parseFloat(m.outsourced_revenue)||0, notes:m.notes||''}));
+  S.monthlyRevenue = data.map(m=>({id:m.id, month:m.month, revenue:parseFloat(m.revenue)||0, outsourced:parseFloat(m.outsourced_revenue)||0, notes:m.notes||'',
+    revenueRaw:(m.revenue===null||m.revenue===undefined)?null:parseFloat(m.revenue), outsourcedRaw:(m.outsourced_revenue===null||m.outsourced_revenue===undefined)?null:parseFloat(m.outsourced_revenue)}));
 }
 async function loadSettings(){
   const {data,error} = await sb.from('app_settings').select('*');
-  if(error){ S.settings={}; S.raw.app_settings=[]; return; }
+  if(error){ loadWarn('app_settings',error); S.settings={}; S.raw.app_settings=[]; return; }
   S.raw.app_settings = data;
   S.settings = Object.fromEntries(data.map(r=>[r.key, r.value]));
 }
@@ -2331,10 +2345,9 @@ function renderAll(){
   // Não redesenha o que a pessoa está digitando (evita perder o foco)
   const ae = document.activeElement;
   const typingIn = sel => ae && ae.closest && ae.closest(sel);
-  if(!typingIn('#pp-tbody')) renderPlan();
-  if(document.getElementById('section-cmv').classList.contains('active') && !typingIn('#rev-tbody') && !typingIn('#cmv-body')){
-    refreshCMVSelect(); renderCMV();
-  }
+  renderWhenIdle('#pp-tbody', renderPlan);
+  if(document.getElementById('section-cmv').classList.contains('active'))
+    renderWhenIdle('#section-cmv', ()=>{ refreshCMVSelect(); renderCMV(); });
 }
 
 // ─── NAVIGATION ───────────────────────────────────────────────
@@ -2586,6 +2599,7 @@ function renderPlanStats(rows){
 }
 
 async function savePlanRow(id){
+  if(!inputsOk(document.getElementById(`pp-ob-${id}`)?.closest('tr'))) return;
   const num = k => parseFloat(document.getElementById(`pp-${k}-${id}`)?.value) || 0;
   const w = S.plan.find(x => x.id === id);
   if(!w) return;
@@ -2603,16 +2617,17 @@ async function savePlanRow(id){
     planned_purchases: w.purchases,
     notes:             w.notes || null
   }).eq('id', id);
-  if(error) toast('Erro ao salvar a semana: ' + error.message, 'err');
+  if(error) alert('A semana NÃO foi salva.\n\n' + dbErr(error));
 }
 
 async function savePlanOpeningCommitment(){
+  if(!inputsOk('#section-planejamento')) return;
   if(!S.plan.length) return;
   const val = parseFloat(document.getElementById('pp-open-commit').value) || 0;
   S.plan[0].openingCommitment = val;
   refreshPlanCalc();
   const {error} = await sb.from('purchase_plan').update({opening_commitment: val}).eq('id', S.plan[0].id);
-  if(error) toast('Erro ao salvar: ' + error.message, 'err');
+  if(error) alert('NÃO foi salvo.\n\n' + dbErr(error));
 }
 
 async function addPlanWeek(){
@@ -2638,10 +2653,8 @@ async function deletePlanWeek(id){
   const w = S.plan.find(x => x.id === id);
   if(!w) return;
   if(!confirm(`Excluir a semana ${weekLabel(w.week)} do plano?`)) return;
-  setLoading(true);
-  await sb.from('purchase_plan').delete().eq('id', id);
-  toast('Semana excluída.');
-  await loadPlan(); renderPlan(); setLoading(false);
+  if(!await dbAction(()=>must(sb.from('purchase_plan').delete().eq('id', id)),'Semana excluída.')) return;
+  await loadPlan(); renderPlan();
 }
 
 // Puxa o saldo final de cada semana para o saldo inicial da seguinte, em bloco.
@@ -2658,7 +2671,8 @@ async function syncPlanOpenings(){
       updates.push(sb.from('purchase_plan').update({opening_balance: prevFinal}).eq('id', S.plan[i].id));
       prevFinal = S.plan[i].opening + S.plan[i].receipts - S.plan[i].payments;
     }
-    await Promise.all(updates);
+    const rs=await Promise.all(updates);
+    const bad=rs.find(r=>r && r.error); if(bad) throw new Error(dbErr(bad.error));
     toast('Saldos encadeados!');
     await loadPlan(); renderPlan();
   } catch(e){ alert('Erro: ' + e.message); }
@@ -2722,6 +2736,7 @@ function sumInstallmentPreview(){
 }
 
 async function saveCommitment(){
+  if(!inputsOk('#m-commit')) return;
   const suppId = parseInt(document.getElementById('cm-supplier').value) || null;
   const desc   = document.getElementById('cm-desc').value.trim();
   const date   = document.getElementById('cm-date').value;
@@ -2764,33 +2779,35 @@ async function deleteCommitment(id){
   const c = S.commits.find(x => x.id === id);
   if(!c) return;
   if(!confirm(`Excluir esta compra e todas as ${c.n} parcelas?\n\n${commitLabel(c)} — ${R(c.total)}`)) return;
-  setLoading(true);
-  await sb.from('commitment_installments').delete().eq('commitment_id', id);
-  await sb.from('commitments').delete().eq('id', id);
-  toast('Compra excluída.');
-  await loadCommitments(); renderCommitments(); updateCommitBadge(); setLoading(false);
+  const ok=await dbAction(async()=>{
+    await must(sb.from('commitment_installments').delete().eq('commitment_id', id));
+    await must(sb.from('commitments').delete().eq('id', id));
+  },'Compra excluída.');
+  if(ok) await loadAll();
 }
 
 // ── Edição de parcela individual ──
 async function saveInstallment(id){
   const inst = S.installments.find(x => x.id === id);
   if(!inst) return;
+  const vr = readNum(`cc-v-${id}`, 'Valor da parcela'); if(!vr.ok) return;
   const due = document.getElementById(`cc-d-${id}`)?.value || inst.due;
-  const amt = parseFloat(document.getElementById(`cc-v-${id}`)?.value) || 0;
-  inst.due = due; inst.amount = amt;
-  const {error} = await sb.from('commitment_installments').update({due_date: due, amount: amt}).eq('id', id);
-  if(error){ toast('Erro ao salvar a parcela: ' + error.message, 'err'); return; }
-  renderCommitments();
+  const amt = vr.val===null ? inst.amount : vr.val;
+  try{ await mustRows(sb.from('commitment_installments').update({due_date: due, amount: amt}).eq('id', id).select('id'), 'A parcela'); }
+  catch(e){ alert('Parcela NÃO foi salva.\n\n' + e.message); renderCommitments(); return; }
+  inst.due = due; inst.amount = amt;   // só muda na tela depois que o banco confirmou
+  toast('Parcela salva.');
+  renderWhenIdle('#section-parcelamentos', renderCommitments);
   if(document.getElementById('section-planejamento').classList.contains('active')) refreshPlanCalc();
 }
 
 async function toggleInstallmentPaid(id, checked){
   const inst = S.installments.find(x => x.id === id);
   if(!inst) return;
+  try{ await mustRows(sb.from('commitment_installments')
+    .update({paid: checked, paid_date: checked ? today() : null}).eq('id', id).select('id'), 'O pagamento da parcela'); }
+  catch(e){ alert('NÃO foi salvo.\n\n' + e.message); renderCommitments(); return; }
   inst.paid = checked; inst.paidDate = checked ? today() : null;
-  const {error} = await sb.from('commitment_installments')
-    .update({paid: checked, paid_date: checked ? today() : null}).eq('id', id);
-  if(error){ toast('Erro ao atualizar: ' + error.message, 'err'); return; }
   renderCommitments(); updateCommitBadge();
   if(document.getElementById('section-planejamento').classList.contains('active')) refreshPlanCalc();
 }
@@ -2980,6 +2997,7 @@ function togglePeriodForm(){
   note.style.display='flex';
 }
 async function savePeriod(){
+  if(!inputsOk('#m-period')) return;
   const type=document.getElementById('p-type').value;
   const start=document.getElementById('p-start').value;
   const end=document.getElementById('p-end').value;
@@ -3005,17 +3023,13 @@ async function closePeriod(id){
   if(!p.openCountId){alert('Período sem contagem de abertura.');return;}
   if(p.type!=='implantacao'&&!p.closeCountId){alert('Período sem contagem de fechamento.');return;}
   if(!confirm(`Fechar "${p.label}"? Ação definitiva.`)) return;
-  setLoading(true);
-  await sb.from('periods').update({status:'fechado'}).eq('id',id);
-  toast('Período fechado!'); await loadAll(); setLoading(false);
+  if(await dbAction(()=>mustRows(sb.from('periods').update({status:'fechado'}).eq('id',id).select('id'),'O fechamento do período'),'Período fechado!')) await loadAll();
 }
 async function deletePeriod(id){
   const p=S.periods.find(x=>x.id===id);
   const usado = p && p.closeCountId && S.periods.some(o=>o.id!==id && o.openCountId===p.closeCountId);
   if(!confirm('Excluir este período e todos os seus dados?' + (usado ? '\n\nAtenção: a contagem de fechamento dele é a abertura do período seguinte.' : ''))) return;
-  setLoading(true);
-  await sb.from('periods').delete().eq('id',id);
-  toast('Período excluído.'); await loadAll(); setLoading(false);
+  if(await dbAction(()=>must(sb.from('periods').delete().eq('id',id)),'Período excluído.')) await loadAll();
 }
 function renderPeriods(){
   const tb=document.getElementById('periodos-tbody');
@@ -3084,6 +3098,68 @@ function confirmReplaceCountLink(period, jsField, newCountId){
 
 // ─── STOCK COUNTS ─────────────────────────────────────────────
 function num(v){ const n=parseFloat(String(v??'').replace(',','.')); return isNaN(n)?0:n; }
+
+// ─── GRAVAÇÃO SEGURA NO BANCO ─────────────────────────────────
+// Toda gravação passa por aqui: erro do Supabase vira exceção com mensagem clara
+// (nunca mais "salvo!" quando o banco recusou).
+function dbErr(error){
+  const m=(error&&(error.message||error.details||error.hint))||String(error||'erro desconhecido');
+  if(/unique or exclusion|on conflict/i.test(m)) return m+'\n\nFalta uma regra de "mês único" na tabela de faturamento. Rode o arquivo verificar_banco.sql no SQL Editor do Supabase.';
+  if(/column|schema cache|relation|does not exist|could not find/i.test(m)) return m+'\n\nO banco não tem uma coluna ou tabela que o sistema usa. Rode as migrações (migracao_v7.sql e migracao_v7_2.sql) no SQL Editor do Supabase.';
+  if(/permission|policy|row-level|row level|42501|not allowed/i.test(m)) return m+'\n\nO banco recusou a gravação por permissão (RLS). Rode as migrações, que desativam o RLS das tabelas do sistema.';
+  if(/failed to fetch|networkerror|network|load failed/i.test(m)) return 'Sem conexão com o banco de dados. Verifique a internet e tente de novo.';
+  return m;
+}
+async function must(q){ const r=await q; if(r && r.error) throw new Error(dbErr(r.error)); return r; }
+// Para update/upsert com .select(): se o banco não devolveu nenhuma linha, nada foi gravado
+// (acontece quando o RLS bloqueia em silêncio ou o registro não existe mais).
+async function mustRows(q, what){
+  const r=await must(q);
+  if(!r.data || (Array.isArray(r.data) && !r.data.length)) throw new Error(`${what||'O registro'} não foi gravado: o banco não confirmou a alteração.\n\nProvável bloqueio de permissão (RLS) ou registro apagado por outra pessoa. Atualize a página e tente de novo; se persistir, rode as migrações no Supabase.`);
+  return r;
+}
+// Executa uma ação de gravação com carregamento e mensagem de erro que não some sozinha
+async function dbAction(fn, okMsg){
+  setLoading(true);
+  try{ await fn(); if(okMsg) toast(okMsg); return true; }
+  catch(e){ console.error(e); alert('NÃO foi salvo.\n\n'+e.message); return false; }
+  finally{ setLoading(false); }
+}
+// Lê um campo numérico. Campo com texto que o navegador não entende (ex.: "3.500,00" em campo
+// numérico) chega vazio: aqui ele é recusado em vez de virar 0 ou apagar o valor.
+function readNum(id, label){
+  const el=document.getElementById(id); if(!el) return {ok:true,val:null};
+  if(el.validity && el.validity.badInput){ alert(`Valor inválido em "${label}". Digite só números, com vírgula ou ponto para os centavos e sem separador de milhar (ex.: 3500,50).`); el.focus(); return {ok:false}; }
+  const v=String(el.value).trim(); if(v==='') return {ok:true,val:null};
+  const n=Number(v.replace(',','.'));
+  if(!isFinite(n) || n<0){ alert(`Valor inválido em "${label}".`); el.focus(); return {ok:false}; }
+  return {ok:true,val:n};
+}
+// Bloqueia o salvamento se algum campo numérico tiver texto que o navegador não entendeu
+// (sem isso o campo chega vazio e a contagem/valor é gravado como 0 sem aviso).
+function inputsOk(sel){
+  const box=typeof sel==='string'?document.querySelector(sel):sel; if(!box) return true;
+  const bad=[...box.querySelectorAll('input[type=number]')].find(el=>el.validity && el.validity.badInput);
+  if(!bad) return true;
+  const row=bad.closest('tr'); const lbl=bad.closest('.fg')?.querySelector('label')?.textContent || (row?row.querySelector('td')?.textContent:'') || 'um dos campos';
+  alert(`Há um valor que o sistema não conseguiu ler em: ${String(lbl).trim().slice(0,60)}.\n\nDigite só números, com vírgula ou ponto para decimais e sem separador de milhar (ex.: 3500,50). Nada foi salvo.`);
+  bad.focus(); return false;
+}
+// Redesenha uma área só quando a pessoa NÃO está digitando dentro dela. Se estiver, espera o
+// foco sair da área (evita trocar o campo em que ela digita por um vazio e perder o valor).
+const _pendingRender={};
+function renderWhenIdle(sel, fn){
+  const box=document.querySelector(sel), ae=document.activeElement;
+  if(box && ae && box.contains(ae) && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName)){
+    if(_pendingRender[sel]) return;
+    _pendingRender[sel]=true;
+    const h=e=>{ if(e.relatedTarget && box.contains(e.relatedTarget)) return;
+      box.removeEventListener('focusout',h); _pendingRender[sel]=false; setTimeout(()=>renderWhenIdle(sel,fn),0); };
+    box.addEventListener('focusout',h);
+    return;
+  }
+  fn();
+}
 function openCountModal(){
   // Reseta modo edição
   document.getElementById('cnt-edit-id').value='';
@@ -3192,6 +3268,7 @@ function updTotals(){
   document.getElementById('cnt-tot-val').textContent=R(v);
 }
 async function saveCount(){
+  if(!inputsOk('#m-count')) return;
   const periodId=parseInt(document.getElementById('cnt-period').value);
   const type=document.getElementById('cnt-type').value;
   const date=document.getElementById('cnt-date').value;
@@ -3289,16 +3366,17 @@ async function saveCount(){
 async function deleteCount(id){
   const usos=S.periods.filter(p=>p.openCountId===id || p.closeCountId===id);
   if(!confirm('Excluir esta contagem?' + (usos.length>1 ? `\n\nEla é usada em ${usos.length} períodos: ${usos.map(p=>p.label).join(', ')}.` : ''))) return;
-  setLoading(true);
   // Limpa TODOS os períodos que apontam para ela (fechamento de um e abertura do seguinte)
-  for(const p of usos){
-    const upd={};
-    if(p.openCountId===id) upd.open_count_id=null;
-    if(p.closeCountId===id) upd.close_count_id=null;
-    await sb.from('periods').update(upd).eq('id',p.id);
-  }
-  await sb.from('stock_counts').delete().eq('id',id);
-  toast('Contagem excluída.'); await loadAll(); setLoading(false);
+  const ok=await dbAction(async()=>{
+    for(const p of usos){
+      const upd={};
+      if(p.openCountId===id) upd.open_count_id=null;
+      if(p.closeCountId===id) upd.close_count_id=null;
+      await must(sb.from('periods').update(upd).eq('id',p.id));
+    }
+    await must(sb.from('stock_counts').delete().eq('id',id));
+  },'Contagem excluída.');
+  if(ok) await loadAll();
 }
 function renderCounts(){
   const tb=document.getElementById('contagem-tbody');
@@ -3392,11 +3470,12 @@ async function maybeUpdateProductCost(prodId, date, cost, purchaseId){
   if(!(cost>0)) return;
   if(!isLatestPurchase(prodId, date, purchaseId)) return;
   const prod=S.products.find(x=>x.id===prodId); const conv=prod?prod.convFactor:1;
-  await sb.from('products').update({unit_cost: cost/conv, purchase_unit_cost: cost}).eq('id', prodId);
+  await must(sb.from('products').update({unit_cost: cost/conv, purchase_unit_cost: cost}).eq('id', prodId));
 }
 
 // Edição de uma linha de compra já registrada
 async function savePurchase(){
+  if(!inputsOk('#m-purchase')) return;
   const periodId=parseInt(document.getElementById('pu-period').value);
   const prodId=parseInt(document.getElementById('pu-product').value);
   const suppId=parseInt(document.getElementById('pu-supplier').value)||null;
@@ -3434,9 +3513,7 @@ async function savePurchase(){
 async function deletePurchase(id){
   const c=S.purchases.find(x=>x.id===id);
   if(!confirm('Excluir esta compra?' + (c && c.commitmentId ? '\n\nEla faz parte de uma compra parcelada: as parcelas em Caixa e Compras NÃO são alteradas.' : ''))) return;
-  setLoading(true);
-  await sb.from('purchases').delete().eq('id',id);
-  toast('Compra excluída.'); await loadAll(); setLoading(false);
+  if(await dbAction(()=>must(sb.from('purchases').delete().eq('id',id)),'Compra excluída.')) await loadAll();
 }
 
 function renderPurchases(){
@@ -3547,6 +3624,7 @@ function calcNota(){
   } else pv.textContent='';
 }
 async function saveNota(){
+  if(!inputsOk('#m-nota')) return;
   const date=document.getElementById('nt-date').value;
   const periodId=parseInt(document.getElementById('nt-period').value);
   const suppId=parseInt(document.getElementById('nt-supplier').value)||null;
@@ -3672,6 +3750,7 @@ function onLossProduct(){
   document.getElementById('ls-val').textContent=R(num(document.getElementById('ls-qty').value)*p.cost);
 }
 async function saveLoss(){
+  if(!inputsOk('#m-loss')) return;
   const date=document.getElementById('ls-date').value;
   const periodId=parseInt(document.getElementById('ls-period').value);
   const p=S.products.find(x=>x.id===parseInt(document.getElementById('ls-product').value));
@@ -3690,8 +3769,7 @@ async function saveLoss(){
 }
 async function deleteLoss(id){
   if(!confirm('Excluir este registro de perda?')) return;
-  setLoading(true); await sb.from('stock_losses').delete().eq('id',id);
-  toast('Perda excluída.'); await loadAll(); setLoading(false);
+  if(await dbAction(()=>must(sb.from('stock_losses').delete().eq('id',id)),'Perda excluída.')) await loadAll();
 }
 function renderLosses(){
   const tb=document.getElementById('perdas-tbody'); if(!tb) return;
@@ -3752,7 +3830,7 @@ function renderCMV(){
       <div class="cmv-box"><div class="cl">🧪 CMV Consumo</div><div class="cv">${d.consumo!==null?R(d.consumo):'—'}</div><div style="font-size:11px;color:var(--muted);margin-top:4px">CMV − Perdas</div></div>
       <div class="cmv-box"><div class="cl">💰 Faturamento do Período</div>
         <input type="number" step="0.01" min="0" id="cmv-wrev" value="${d.revenue!==null?d.revenue:''}" placeholder="Opcional" style="text-align:center;margin-top:2px" onchange="saveWeeklyRevenue(${p.id})">
-        <div style="font-size:10.5px;color:var(--muted);margin-top:4px">Terceirizados: <input type="number" step="0.01" min="0" id="cmv-wouts" value="${d.revenue!==null?d.outsourced:''}" style="width:90px;padding:3px 6px;font-size:11px;display:inline-block" onchange="saveWeeklyRevenue(${p.id})"></div></div>
+        <div style="font-size:10.5px;color:var(--muted);margin-top:4px">Terceirizados: <input type="number" step="0.01" min="0" id="cmv-wouts" value="${p.outsourcedRaw!==null&&p.outsourcedRaw!==undefined?p.outsourcedRaw:''}" style="width:90px;padding:3px 6px;font-size:11px;display:inline-block" onchange="saveWeeklyRevenue(${p.id})"></div></div>
       <div class="cmv-box hl"><div class="cl">= CMV %</div><div class="cv">${d.pct!==null?P(d.pct):'—'}</div>
         <div style="font-size:10px;color:var(--primary-d);margin-top:4px">${d.pct!==null?(d.pctInt!==null?'s/ internos: '+P(d.pctInt):''):'Sem faturamento do período'}</div></div>
     </div>
@@ -3762,20 +3840,22 @@ function renderCMV(){
     ${d.purch.length>0?`<div class="panel" style="margin-top:4px"><div class="panel-hdr"><span class="panel-ttl">Compras do Período</span></div><div class="tbl-wrap"><table><thead><tr><th>Recebido</th><th>Produto</th><th>Qtd</th><th>Custo/Unid. Compra</th><th>Custo/Unid. Estoque</th><th>Frete</th><th>Total</th></tr></thead><tbody>${d.purch.map(c=>{const pr=S.products.find(x=>x.id===c.prodId);const pu=pr?pr.purchaseUnit:'un.';const su=pr?pr.stockUnit:'un.';const cf=pr?pr.convFactor:1;const sc=cost_per_stock(c.cost,cf);return `<tr><td>${fmtDate(c.date)}</td><td>${pr?pr.name:'—'}${c.isBonus?' <span class="badge b-indigo">Bonif.</span>':''}</td><td>${N(c.qty,3)} <span style="font-size:11px;color:var(--muted)">${pu}</span></td><td class="mono">${R(c.cost)}/${pu}</td><td class="mono ${cf>1?'text-primary':''}">${R(sc)}/${su}</td><td class="mono text-muted">${c.freight?R(c.freight):'—'}</td><td class="mono fw6 text-primary">${R(c.total)}</td></tr>`;}).join('')}<tr style="background:#F8FAFC"><td colspan="6" style="text-align:right;font-weight:600;padding:9px 14px">Total Compras</td><td class="mono fw7 text-primary" style="padding:9px 14px">${R(d.compras)}</td></tr></tbody></table></div></div>`:''}`;
 }
 async function saveWeeklyRevenue(periodId){
-  const rv=document.getElementById('cmv-wrev').value, ov=document.getElementById('cmv-wouts').value;
-  const revenue = rv==='' ? null : num(rv);
-  const outs = ov==='' ? null : num(ov);
+  // lê os DOIS campos agora, antes de qualquer redesenho
+  const a=readNum('cmv-wrev','Faturamento do período'); if(!a.ok) return;
+  const b=readNum('cmv-wouts','Terceirizados'); if(!b.ok) return;
+  const revenue=a.val, outs=b.val;
   if(revenue!==null && outs!==null && outs>revenue){ alert('Terceirizados não pode ser maior que o faturamento.'); return; }
-  const {error}=await sb.from('periods').update({revenue, outsourced_revenue:outs}).eq('id',periodId);
-  if(error){ toast('Erro ao salvar faturamento (rode a migração v7): '+error.message,'err'); return; }
-  const p=S.periods.find(x=>x.id===periodId); if(p){ p.revenue=revenue; p.outsourced=outs||0; }
+  try{
+    await mustRows(sb.from('periods').update({revenue, outsourced_revenue:outs}).eq('id',periodId).select('id'), 'O faturamento do período');
+  }catch(e){ alert('Faturamento NÃO foi salvo.\n\n'+e.message); return; }
+  const p=S.periods.find(x=>x.id===periodId); if(p){ p.revenue=revenue; p.outsourced=outs||0; p.outsourcedRaw=outs; }
   toast('Faturamento do período salvo.');
-  renderCMV(); renderMonthlyRevenue(); renderCMVHistory();
+  renderWhenIdle('#section-cmv', ()=>{ renderCMV(); renderCMVHistory(); });
 }
 async function saveCMVGoal(){
   const v=document.getElementById('cmv-goal').value;
-  const {error}=await sb.from('app_settings').upsert({key:'cmv_goal_pct', value:v===''?null:String(num(v))});
-  if(error){ toast('Erro ao salvar meta (rode a migração v7): '+error.message,'err'); return; }
+  try{ await mustRows(sb.from('app_settings').upsert({key:'cmv_goal_pct', value:v===''?null:String(num(v))}).select('key'), 'A meta de CMV'); }
+  catch(e){ alert('Meta NÃO foi salva.\n\n'+e.message); return; }
   S.settings.cmv_goal_pct = v===''?null:String(num(v));
   toast('Meta de CMV % salva.'); renderMonthlyRevenue(); renderCMVHistory();
 }
@@ -3795,8 +3875,8 @@ function renderMonthlyRevenue(){
     const mr=s.mr;
     rows.push(`<tr>
       <td><strong>${MESES[m-1]}</strong>${s.overlap?' <span class="badge b-warn" title="Há período mensal e semanal no mesmo mês — o CMV pode estar contado em dobro">sobreposição</span>':''}</td>
-      <td style="text-align:right"><input type="number" class="pp-in" step="0.01" min="0" id="rv-r-${ym}" value="${mr?mr.revenue:''}" placeholder="${s.fonte==='semanal'?'Σ semanas: '+r2(s.rev):''}" onchange="saveMonthlyRevenue('${ym}')"></td>
-      <td style="text-align:right"><input type="number" class="pp-in" step="0.01" min="0" id="rv-o-${ym}" value="${mr?mr.outsourced:''}" onchange="saveMonthlyRevenue('${ym}')"></td>
+      <td style="text-align:right"><input type="number" class="pp-in" step="0.01" min="0" id="rv-r-${ym}" value="${mr&&mr.revenueRaw!==null?mr.revenueRaw:''}" placeholder="${s.fonte==='semanal'?'Σ semanas: '+r2(s.rev):''}" onchange="saveMonthlyRevenue('${ym}')"></td>
+      <td style="text-align:right"><input type="number" class="pp-in" step="0.01" min="0" id="rv-o-${ym}" value="${mr&&mr.outsourcedRaw!==null?mr.outsourcedRaw:''}" onchange="saveMonthlyRevenue('${ym}')"></td>
       <td style="text-align:center;font-size:12px">${s.nPeriods?`${s.nCompletos}/${s.nPeriods}`:'—'}${s.nPendentes?` <span class="badge b-warn" title="Períodos sem contagem de fechamento">${s.nPendentes} pend.</span>`:''}</td>
       <td style="text-align:right" class="mono ${s.cmv!==null?'fw6':'text-muted'}">${R(s.cmv)}</td>
       <td style="text-align:right" class="mono text-muted">${s.perdas?R(s.perdas):'—'}</td>
@@ -3808,18 +3888,21 @@ function renderMonthlyRevenue(){
   tb.innerHTML=rows.join('');
 }
 async function saveMonthlyRevenue(ym){
-  const rv=document.getElementById('rv-r-'+ym).value, ov=document.getElementById('rv-o-'+ym).value;
-  const revenue=num(rv), outs=num(ov);
-  if(outs>revenue && revenue>0){ alert('Terceirizados não pode ser maior que o faturamento do mês.'); return; }
+  // lê os DOIS campos do mês agora (antes de qualquer redesenho da tabela)
+  const a=readNum('rv-r-'+ym,'Faturamento Bruto de '+monthLabel(ym)); if(!a.ok) return;
+  const b=readNum('rv-o-'+ym,'Terceirizados de '+monthLabel(ym)); if(!b.ok) return;
+  const revenue=a.val, outs=b.val;
+  if(revenue!==null && outs!==null && outs>revenue){ alert('Terceirizados não pode ser maior que o faturamento do mês.'); return; }
   const month=ym+'-01';
   const exists=S.monthlyRevenue.find(m=>m.month.slice(0,7)===ym);
-  let error;
-  if(rv==='' && ov==='' && exists) ({error}=await sb.from('monthly_revenue').delete().eq('id',exists.id));
-  else ({error}=await sb.from('monthly_revenue').upsert({month, revenue, outsourced_revenue:outs},{onConflict:'month'}));
-  if(error){ toast('Erro ao salvar (rode a migração v7): '+error.message,'err'); return; }
+  try{
+    if(revenue===null && outs===null){ if(exists) await must(sb.from('monthly_revenue').delete().eq('id',exists.id)); }
+    else await mustRows(sb.from('monthly_revenue').upsert({month, revenue, outsourced_revenue:outs},{onConflict:'month'}).select('id'), 'O faturamento de '+monthLabel(ym));
+  }catch(e){ alert('Faturamento de '+monthLabel(ym)+' NÃO foi salvo.\n\n'+e.message); return; }
   await loadRevenue();
   toast('Faturamento de '+monthLabel(ym)+' salvo.');
-  renderMonthlyRevenue(); renderCMVHistory(); renderDashboard();
+  renderWhenIdle('#rev-tbody', ()=>{ renderMonthlyRevenue(); renderCMVHistory(); });
+  renderDashboard();
 }
 function renderCMVHistory(){
   const tb=document.getElementById('cmv-hist');
@@ -3984,6 +4067,7 @@ function openProductModal(id){
 function editProduct(id){ openProductModal(id); }
 
 async function saveProduct(){
+  if(!inputsOk('#m-product')) return;
   const id=document.getElementById('prod-m-id').value;
   const name=document.getElementById('prod-m-name').value.trim();
   const cat=document.getElementById('prod-m-cat').value;
@@ -4027,25 +4111,23 @@ async function saveProduct(){
       productData.exams_per_unit = epuV===''?null:num(epuV);
     }
     if(id){
-      await sb.from('products').update(productData).eq('id',prodId);
+      await mustRows(sb.from('products').update(productData).eq('id',prodId).select('id'), 'O produto');
     } else {
-      const {data}=await sb.from('products').insert(productData).select().single();
+      const {data}=await must(sb.from('products').insert(productData).select().single());
       prodId=data.id;
     }
-    await sb.from('product_suppliers').delete().eq('product_id',prodId);
-    if(supps.length) await sb.from('product_suppliers').insert(supps.map(s=>({product_id:prodId,supplier_id:s})));
+    await must(sb.from('product_suppliers').delete().eq('product_id',prodId));
+    if(supps.length) await must(sb.from('product_suppliers').insert(supps.map(s=>({product_id:prodId,supplier_id:s}))));
     // Adiciona automaticamente unidades novas à lista de sugestões (silencioso, não bloqueia se falhar)
     await autoRegisterUnits([pu, su, subLabel]);
     closeM('m-product'); toast('Produto salvo!'); await loadAll();
-  } catch(e){alert('Erro: '+e.message);}
+  } catch(e){alert('Produto NÃO foi salvo.\n\n'+e.message);}
   finally{setLoading(false);}
 }
 
 async function delProduct(id){
   if(!confirm('Inativar este produto?')) return;
-  setLoading(true);
-  await sb.from('products').update({active:false}).eq('id',id);
-  toast('Produto inativado.'); await loadAll(); setLoading(false);
+  if(await dbAction(()=>mustRows(sb.from('products').update({active:false}).eq('id',id).select('id'),'A inativação do produto'),'Produto inativado.')) await loadAll();
 }
 
 // ─── SUPPLIERS ────────────────────────────────────────────────
@@ -4074,10 +4156,10 @@ async function saveSupplier(){
   const contact=document.getElementById('supp-m-contact').value.trim();
   const phone=document.getElementById('supp-m-phone').value.trim();
   if(!name){alert('Informe o nome.');return;}
-  setLoading(true);
-  if(id) await sb.from('suppliers').update({name,contact,phone}).eq('id',parseInt(id));
-  else await sb.from('suppliers').insert({name,contact,phone});
-  closeM('m-supplier'); toast('Fornecedor salvo!'); await loadAll(); setLoading(false);
+  const ok=await dbAction(()=> id
+    ? mustRows(sb.from('suppliers').update({name,contact,phone}).eq('id',parseInt(id)).select('id'),'O fornecedor')
+    : must(sb.from('suppliers').insert({name,contact,phone})), 'Fornecedor salvo!');
+  if(ok){ closeM('m-supplier'); await loadAll(); }
 }
 
 // ─── UNITS (Cadastro de Unidades) ──────────────────────────────
@@ -4113,10 +4195,8 @@ async function addUnit(){
 }
 async function deleteUnit(id){
   if(!confirm('Remover esta unidade da lista de sugestões? Produtos que já usam esse texto não são afetados.')) return;
-  setLoading(true);
-  await sb.from('units').delete().eq('id',id);
-  toast('Unidade removida.');
-  await loadUnits(); renderUnits(); setLoading(false);
+  if(!await dbAction(()=>must(sb.from('units').delete().eq('id',id)),'Unidade removida.')) return;
+  await loadUnits(); renderUnits();
 }
 
 // ─── ALERTS ───────────────────────────────────────────────────
@@ -4395,29 +4475,31 @@ function editPeriod(id){
   document.getElementById('pe-end-grp').style.display=p.type==='implantacao'?'none':'block';
   document.getElementById('pe-rev-grp').style.display=p.type==='implantacao'?'none':'block';
   document.getElementById('pe-rev').value=p.revenue!==null?p.revenue:'';
-  document.getElementById('pe-outs').value=p.revenue!==null?p.outsourced:'';
+  document.getElementById('pe-outs').value=(p.outsourcedRaw!==null&&p.outsourcedRaw!==undefined)?p.outsourcedRaw:'';
   openM('m-period-edit');
 }
 
 async function savePeriodEdit(){
+  if(!inputsOk('#m-period-edit')) return;
   const id=parseInt(document.getElementById('pe-id').value);
   const label=document.getElementById('pe-label').value.trim();
   const start=document.getElementById('pe-start').value;
   const end=document.getElementById('pe-end').value;
-  const rv=document.getElementById('pe-rev').value, ov=document.getElementById('pe-outs').value;
+  const rA=readNum('pe-rev','Faturamento'); if(!rA.ok) return;
+  const oA=readNum('pe-outs','Terceirizados'); if(!oA.ok) return;
   if(!label){alert('Informe o nome do período.');return;}
   if(!start){alert('Informe a data de início.');return;}
   if(end && end<start){alert('A data de fim não pode ser antes do início.');return;}
   const upd={label, start_date:start, end_date:end||null};
   const p=S.periods.find(x=>x.id===id);
   if(p && p.type!=='implantacao'){
-    upd.revenue = rv===''?null:num(rv);
-    upd.outsourced_revenue = ov===''?null:num(ov);
+    upd.revenue = rA.val;
+    upd.outsourced_revenue = oA.val;
     if(upd.revenue!==null && upd.outsourced_revenue>upd.revenue){ alert('Terceirizados não pode ser maior que o faturamento.'); return; }
   }
   setLoading(true);
-  const {error}=await sb.from('periods').update(upd).eq('id',id);
-  if(error){setLoading(false);alert('Erro: '+error.message);return;}
+  try{ await mustRows(sb.from('periods').update(upd).eq('id',id).select('id'), 'O período'); }
+  catch(e){ setLoading(false); alert('Período NÃO foi salvo.\n\n'+e.message); return; }
   closeM('m-period-edit');
   toast('Período atualizado!');
   await loadAll(); setLoading(false);
@@ -4471,6 +4553,7 @@ function calcQERow(pid){
 }
 
 async function saveQuickEdit(){
+  if(!inputsOk('#m-quickedit')) return;
   const prods = S.products.filter(p=>p.active);
   // Verifica se existe alguma linha com o alerta de compra=estoque+fator≠1 antes de confirmar
   const suspeitas = prods.filter(p=>{
